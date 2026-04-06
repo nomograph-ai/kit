@@ -37,6 +37,7 @@ pub enum IntegrityResult {
     /// SAME version but DIFFERENT checksum. Supply chain attack indicator (S-2).
     ChecksumChanged,
     /// Tool resolved from a different registry than previously locked (S-9).
+    #[allow(dead_code)]
     RegistryChanged { from: String, to: String },
     /// Tool not present in lockfile yet.
     New,
@@ -154,6 +155,7 @@ impl Lockfile {
     }
 
     /// Remove an entry by tool name. Returns the removed entry if it existed.
+    #[allow(dead_code)]
     pub fn remove(&mut self, name: &str) -> Option<LockEntry> {
         self.entries.remove(name)
     }
@@ -180,10 +182,10 @@ impl Lockfile {
         }
 
         // Same version -- check checksum integrity (S-2)
-        if let (Some(existing_sha), Some(new_sha)) = (existing.sha256.as_deref(), new_sha256) {
-            if existing_sha != new_sha {
-                return IntegrityResult::ChecksumChanged;
-            }
+        if let (Some(existing_sha), Some(new_sha)) = (existing.sha256.as_deref(), new_sha256)
+            && existing_sha != new_sha
+        {
+            return IntegrityResult::ChecksumChanged;
         }
 
         IntegrityResult::Ok
@@ -194,6 +196,7 @@ impl Lockfile {
     /// Separated from `check_integrity` because registry changes are
     /// warnings, not hard stops, and callers may want to handle them
     /// differently.
+    #[allow(dead_code)]
     pub fn check_registry(
         &self,
         name: &str,

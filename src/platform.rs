@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Platforms kit supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
