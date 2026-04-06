@@ -270,24 +270,24 @@ impl ToolDef {
             );
         }
 
-        if let Some(ref bin) = self.bin {
-            if !bin_re.is_match(bin) {
-                anyhow::bail!(
-                    "invalid bin name '{}' for {}: must match {BIN_PATTERN}",
-                    bin,
-                    self.name
-                );
-            }
+        if let Some(ref bin) = self.bin
+            && !bin_re.is_match(bin)
+        {
+            anyhow::bail!(
+                "invalid bin name '{}' for {}: must match {BIN_PATTERN}",
+                bin,
+                self.name
+            );
         }
 
-        if let Some(ref repo) = self.repo {
-            if !repo_re.is_match(repo) {
-                anyhow::bail!(
-                    "invalid repo '{}' for {}: must match {REPO_PATTERN}",
-                    repo,
-                    self.name
-                );
-            }
+        if let Some(ref repo) = self.repo
+            && !repo_re.is_match(repo)
+        {
+            anyhow::bail!(
+                "invalid repo '{}' for {}: must match {REPO_PATTERN}",
+                repo,
+                self.name
+            );
         }
 
         // Validate asset names: no path separators, no percent-encoding
@@ -345,6 +345,7 @@ impl ToolDef {
 
 /// Registry metadata from _meta.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RegistryMeta {
     pub registry: RegistryInfo,
     #[serde(default)]
@@ -352,6 +353,7 @@ pub struct RegistryMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RegistryInfo {
     pub name: String,
     #[serde(default)]
@@ -361,6 +363,7 @@ pub struct RegistryInfo {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RegistryPolicy {
     #[serde(default)]
     pub auto_merge_tiers: Vec<Tier>,
@@ -370,6 +373,7 @@ pub struct RegistryPolicy {
     pub auto_merge_requires_checksum: bool,
 }
 
+#[allow(dead_code)]
 fn default_true() -> bool {
     true
 }
@@ -409,6 +413,7 @@ pub fn load_registry_tools(registry_dir: &Path) -> Result<Vec<ToolDef>> {
 }
 
 /// Load registry metadata from _meta.toml.
+#[allow(dead_code)]
 pub fn load_registry_meta(registry_dir: &Path) -> Result<RegistryMeta> {
     let path = registry_dir.join("tools").join("_meta.toml");
     if !path.exists() {
