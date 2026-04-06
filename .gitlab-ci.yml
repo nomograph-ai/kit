@@ -25,6 +25,8 @@ default:
 
 variables:
   CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  # Route Docker Hub pulls through GitLab dependency proxy to avoid rate limits
+  DOCKER_HUB_MIRROR: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}
 
 workflow:
   name: "$CI_COMMIT_REF_NAME ($CI_PIPELINE_SOURCE)"
@@ -38,7 +40,7 @@ workflow:
 # -- Reusable config --
 
 .rust:
-  image: rust:1.93-bookworm
+  image: ${DOCKER_HUB_MIRROR}/rust:1.93-bookworm
   cache:
     - key: cargo-registry-${CI_COMMIT_REF_SLUG}
       paths:
@@ -171,7 +173,7 @@ sign:linux:
   stage: sign
   extends: .on-tag
   image:
-    name: bitnami/cosign:latest
+    name: ${DOCKER_HUB_MIRROR}/bitnami/cosign:latest
     entrypoint: [""]
   interruptible: false
   needs:
@@ -199,7 +201,7 @@ sign:darwin:
   stage: sign
   extends: .on-tag
   image:
-    name: bitnami/cosign:latest
+    name: ${DOCKER_HUB_MIRROR}/bitnami/cosign:latest
     entrypoint: [""]
   interruptible: false
   needs:
@@ -228,7 +230,7 @@ sign:darwin:
 publish:
   stage: publish
   extends: .on-tag
-  image: alpine:latest
+  image: ${DOCKER_HUB_MIRROR}/alpine:latest
   interruptible: false
   needs:
     - job: build:darwin-arm64
