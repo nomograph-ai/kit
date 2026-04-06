@@ -121,10 +121,11 @@ fn https_client() -> Result<reqwest::blocking::Client> {
         .context("failed to build HTTP client")
 }
 
-/// Download the upstream checksum file, parse it, and compare against the
-/// installed binary. This implements security finding S-7: verify AFTER
-/// mise install, not before.
-pub fn download_and_verify_checksum(
+/// F13: Resolve the expected SHA256 for a tool+platform from upstream.
+/// Returns the expected hash -- does NOT compare against an actual binary.
+/// Callers must compare the result themselves.
+/// Checks inline checksums first, falls back to downloading upstream checksum file.
+pub fn resolve_expected_checksum(
     tool: &ToolDef,
     platform: Platform,
 ) -> Result<VerifyResult> {
@@ -382,7 +383,7 @@ pub fn verify_tool(
 
     // -- 3. SHA256 checksum --
     if tool.checksum.is_some() || !tool.checksums.is_empty() {
-        let checksum_result = download_and_verify_checksum(tool, platform)?;
+        let checksum_result = resolve_expected_checksum(tool, platform)?;
         match checksum_result {
             VerifyResult::Verified {
                 method,
@@ -423,7 +424,7 @@ fn verify_checksum_against_binary(
     if tool.checksum.is_none() && tool.checksums.is_empty() {
         return None;
     }
-    match download_and_verify_checksum(tool, platform) {
+    match resolve_expected_checksum(tool, platform) {
         Ok(VerifyResult::Verified { sha256: expected, .. }) => {
             if actual_sha != expected {
                 Some(VerifyResult::Failed {
