@@ -519,7 +519,7 @@ mod tests {
     fn validate_repo_accepts_valid() {
         assert!(validate_repo("cli/cli").is_ok());
         assert!(validate_repo("sigstore/cosign").is_ok());
-        assert!(validate_repo("dunn.dev/kit").is_ok());
+        assert!(validate_repo("nomograph/kit").is_ok());
         assert!(validate_repo("my-org/my-tool").is_ok());
     }
 

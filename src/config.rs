@@ -210,9 +210,9 @@ mod tests {
 
     #[test]
     fn valid_urls() {
-        assert!(validate_registry_url("https://gitlab.com/dunn.dev/kit.git").is_ok());
-        assert!(validate_registry_url("git@gitlab.com:dunn.dev/kit.git").is_ok());
-        assert!(validate_registry_url("ssh://git@gitlab.com/dunn.dev/kit.git").is_ok());
+        assert!(validate_registry_url("https://gitlab.com/nomograph/kit.git").is_ok());
+        assert!(validate_registry_url("git@gitlab.com:nomograph/kit.git").is_ok());
+        assert!(validate_registry_url("ssh://git@gitlab.com/nomograph/kit.git").is_ok());
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn default_config() {
-        let config = Config::default_with_registry("dunn", "https://gitlab.com/dunn.dev/kit/registry.git");
+        let config = Config::default_with_registry("dunn", "https://gitlab.com/nomograph/kits.git");
         assert_eq!(config.registry.len(), 1);
         assert_eq!(config.registry[0].name, "dunn");
         assert!(!config.registry[0].readonly);

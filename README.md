@@ -12,7 +12,7 @@ signatures, and automates upstream update tracking.
 ### From source
 
 ```bash
-cargo install --git https://gitlab.com/dunn.dev/kit/cli.git
+cargo install --git https://gitlab.com/nomograph/kit.git
 ```
 
 ### From release (mise)
@@ -103,7 +103,7 @@ registry wins when tools overlap. Local pins override registry versions.
 ```toml
 [[registry]]
 name = "dunn"
-url = "https://gitlab.com/dunn.dev/kit/registry.git"
+url = "https://gitlab.com/nomograph/kits.git"
 
 [[registry]]
 name = "corp"
