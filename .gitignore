@@ -1,5 +1,7 @@
-updates.json
-updates.json.sha256
-evaluated.json
-evaluated.json.sha256
-__pycache__/
+/target
+/.cargo
+/.rustup
+*.bundle
+checksums-*.txt
+checksums.txt
+*.sbom.cdx.json

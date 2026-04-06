@@ -103,7 +103,7 @@ audit:
     - echo "--- cargo audit (RustSec advisory database) ---"
     - cargo audit
     - echo "--- cargo deny (licenses, advisories, bans) ---"
-    - cargo deny check advisories licenses bans || true
+    - cargo deny check advisories licenses bans
 
 # -- Build stage (tag only) --
 
