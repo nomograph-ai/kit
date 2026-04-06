@@ -403,6 +403,25 @@ impl ToolDef {
             Source::Rustup => {}
         }
 
+        // T3-6: validate inline checksums are valid hex hashes
+        for (platform, hash) in &self.checksums {
+            if Platform::from_key(platform).is_none() {
+                anyhow::bail!(
+                    "unknown platform '{}' in checksums for {}",
+                    platform,
+                    self.name
+                );
+            }
+            if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                anyhow::bail!(
+                    "invalid inline checksum for {} ({}): must be 64 hex chars, got '{}'",
+                    self.name,
+                    platform,
+                    hash
+                );
+            }
+        }
+
         Ok(())
     }
 }

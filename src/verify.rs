@@ -276,14 +276,19 @@ pub fn verify_tool(
     mise_install_dir: &Path,
 ) -> Result<VerifyResult> {
     let bin_name = tool.bin_name();
-    let binary_path = mise_install_dir.join("bin").join(bin_name);
-
-    if !binary_path.exists() {
+    // T3-4: check both bin/<name> and <name> (some mise backends skip bin/ subdir)
+    let primary = mise_install_dir.join("bin").join(bin_name);
+    let fallback = mise_install_dir.join(bin_name);
+    let binary_path = if primary.exists() {
+        primary
+    } else if fallback.exists() {
+        fallback
+    } else {
         return Ok(VerifyResult::Failed {
             method: "pre-check".to_string(),
-            reason: format!("binary not found at {}", binary_path.display()),
+            reason: format!("binary not found at {} or {}", primary.display(), fallback.display()),
         });
-    }
+    };
 
     // Always compute the installed binary's SHA256 for the result.
     let actual_sha = compute_sha256(&binary_path)?;

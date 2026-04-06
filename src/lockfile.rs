@@ -18,11 +18,16 @@ pub struct LockEntry {
     /// Fully resolved download URL for this platform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// SHA-256 checksum of the installed binary.
+    /// T3-1: Registry-provided inline checksum (archive hash).
+    /// Used by S-2 integrity check -- compares registry-to-registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
-    /// F16: verification method available (not necessarily executed).
-    /// Values: "cosign", "attestation", "checksum", or "none".
+    pub registry_sha256: Option<String>,
+    /// F6: SHA-256 of the installed binary (computed after mise install).
+    /// Different from registry_sha256 for archive-distributed tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
+    /// T3-3: backwards-compatible alias for pre-rename lockfiles.
+    #[serde(default, alias = "verified", alias = "sha256")]
     pub verification_method: String,
     /// ISO 8601 timestamp of last update.
     pub updated: String,
@@ -163,14 +168,19 @@ impl Lockfile {
 
     /// Check integrity of a new version/checksum against the existing lock entry.
     ///
-    /// Security findings implemented:
-    /// - **S-2**: Same version + changed checksum = hard stop (supply chain attack).
+    /// T3-1: Compares registry-to-registry checksums (not binary hash).
+    /// The registry_sha256 field stores the inline checksum from the registry
+    /// (which is an archive hash). Comparing this against the new registry
+    /// checksum detects upstream tampering without false positives from
+    /// binary-vs-archive hash differences.
+    ///
+    /// - **S-2**: Same version + changed registry checksum = hard stop.
     /// - **S-9**: Registry source change = warning (dependency confusion).
     pub fn check_integrity(
         &self,
         name: &str,
         new_version: &str,
-        new_sha256: Option<&str>,
+        new_registry_sha256: Option<&str>,
     ) -> IntegrityResult {
         let existing = match self.entries.get(name) {
             Some(e) => e,
@@ -182,8 +192,9 @@ impl Lockfile {
             return IntegrityResult::VersionChanged;
         }
 
-        // Same version -- check checksum integrity (S-2)
-        if let (Some(existing_sha), Some(new_sha)) = (existing.sha256.as_deref(), new_sha256)
+        // Same version -- compare registry checksums (T3-1: registry-to-registry)
+        if let (Some(existing_sha), Some(new_sha)) =
+            (existing.registry_sha256.as_deref(), new_registry_sha256)
             && existing_sha != new_sha
         {
             return IntegrityResult::ChecksumChanged;
@@ -216,18 +227,21 @@ impl Lockfile {
 }
 
 /// Create a new `LockEntry` with the current timestamp.
+/// T3-1: accepts separate registry (archive) and binary checksums.
 pub fn new_entry(
     version: &str,
     registry: &str,
     url: Option<&str>,
-    sha256: Option<&str>,
+    registry_sha256: Option<&str>,
+    binary_sha256: Option<&str>,
     verification_method: &str,
 ) -> LockEntry {
     LockEntry {
         version: version.to_string(),
         registry: registry.to_string(),
         url: url.map(String::from),
-        sha256: sha256.map(String::from),
+        registry_sha256: registry_sha256.map(String::from),
+        binary_sha256: binary_sha256.map(String::from),
         verification_method: verification_method.to_string(),
         updated: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     }
@@ -352,7 +366,8 @@ mod tests {
             version: version.to_string(),
             registry: registry.to_string(),
             url: Some("https://example.com/tool".to_string()),
-            sha256: sha256.map(String::from),
+            registry_sha256: sha256.map(String::from),
+            binary_sha256: None,
             verification_method: "checksum".to_string(),
             updated: "2026-04-06T14:30:00Z".to_string(),
         }
@@ -534,7 +549,8 @@ mod tests {
                             "https://github.com/cli/cli/releases/download/v2.89.0/gh_2.89.0_macOS_arm64.zip"
                                 .to_string(),
                         ),
-                        sha256: Some("abc123".to_string()),
+                        registry_sha256: Some("abc123".to_string()),
+                        binary_sha256: None,
                         verification_method: "checksum".to_string(),
                         updated: "2026-04-06T14:30:00Z".to_string(),
                     },
@@ -545,7 +561,8 @@ mod tests {
                         version: "0.6.2".to_string(),
                         registry: "dunn".to_string(),
                         url: None,
-                        sha256: None,
+                        registry_sha256: None,
+                        binary_sha256: None,
                         verification_method: "cosign".to_string(),
                         updated: "2026-04-06T14:30:00Z".to_string(),
                     },
@@ -565,7 +582,7 @@ mod tests {
         );
         assert_eq!(parsed.resolved["muxr"].version, "0.6.2");
         assert!(parsed.resolved["muxr"].url.is_none());
-        assert!(parsed.resolved["muxr"].sha256.is_none());
+        assert!(parsed.resolved["muxr"].registry_sha256.is_none());
     }
 
     #[test]
@@ -589,7 +606,7 @@ mod tests {
 
     #[test]
     fn new_entry_has_timestamp() {
-        let e = new_entry("2.89.0", "dunn", None, None, "none");
+        let e = new_entry("2.89.0", "dunn", None, None, None, "none");
         // Should parse as a valid RFC 3339 timestamp
         assert!(chrono::DateTime::parse_from_rfc3339(&e.updated).is_ok());
     }
