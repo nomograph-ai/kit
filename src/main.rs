@@ -624,26 +624,26 @@ fn cmd_push(name: &str) -> Result<()> {
     // Validate before pushing
     let _def = tool::ToolDef::load(&tool_path)?;
 
-    // Git add + commit via git2
-    let repo =
-        git2::Repository::open(&registry_dir).context("failed to open registry repo")?;
-
+    // Git add + commit via CLI
     let relative = std::path::Path::new("tools").join(format!("{name}.toml"));
-    let mut index = repo.index()?;
-    index.add_path(&relative)?;
-    index.write()?;
-
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let head = repo.head()?.peel_to_commit()?;
-
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("kit", "kit@localhost"))
-        .context("failed to create git signature")?;
+    let add_status = std::process::Command::new("git")
+        .args(["add", &relative.to_string_lossy()])
+        .current_dir(&registry_dir)
+        .status()
+        .context("failed to run git add")?;
+    if !add_status.success() {
+        anyhow::bail!("git add failed for {name}.toml");
+    }
 
     let message = format!("kit: add {name}");
-    repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&head])?;
+    let commit_status = std::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(&registry_dir)
+        .status()
+        .context("failed to run git commit")?;
+    if !commit_status.success() {
+        anyhow::bail!("git commit failed for {name}.toml");
+    }
 
     // Push via git CLI (needs system credential helpers)
     let status = std::process::Command::new("git")
