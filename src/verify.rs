@@ -20,10 +20,12 @@ pub enum VerifyResult {
 }
 
 impl VerifyResult {
+    #[allow(dead_code)]
     pub fn is_verified(&self) -> bool {
         matches!(self, Self::Verified { .. })
     }
 
+    #[allow(dead_code)]
     pub fn is_failed(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
@@ -286,8 +288,9 @@ pub fn verify_tool(
     let actual_sha = compute_sha256(&binary_path)?;
 
     // -- 1. Cosign keyless --
-    if let Some(ref sig) = tool.signature {
-        if sig.method == SignatureMethod::CosignKeyless {
+    if let Some(ref sig) = tool.signature
+        && sig.method == SignatureMethod::CosignKeyless
+    {
             let issuer = sig
                 .issuer
                 .as_deref()
@@ -338,12 +341,12 @@ pub fn verify_tool(
                     );
                 }
             }
-        }
     }
 
     // -- 2. GitHub attestation --
-    if let Some(ref sig) = tool.signature {
-        if sig.method == SignatureMethod::GithubAttestation {
+    if let Some(ref sig) = tool.signature
+        && sig.method == SignatureMethod::GithubAttestation
+    {
             let repo = tool
                 .repo
                 .as_deref()
@@ -375,7 +378,6 @@ pub fn verify_tool(
                     );
                 }
             }
-        }
     }
 
     // -- 3. SHA256 checksum --
