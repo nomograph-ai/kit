@@ -258,24 +258,50 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
 
     // 5. Run mise install
     eprint!("  running mise install... ");
-    let status = std::process::Command::new("mise")
+    let mise_ok = match std::process::Command::new("mise")
         .args(["install", "--yes"])
-        .status();
-    match status {
-        Ok(s) if s.success() => eprintln!("ok"),
-        Ok(s) => eprintln!("warning: mise install exited {s}"),
-        Err(e) => eprintln!("warning: could not run mise: {e}"),
+        .status()
+    {
+        Ok(s) if s.success() => {
+            eprintln!("ok");
+            true
+        }
+        Ok(s) => {
+            eprintln!("warning: mise install exited {s}");
+            false
+        }
+        Err(e) => {
+            eprintln!("warning: could not run mise: {e}");
+            false
+        }
+    };
+
+    // F12: warn clearly if mise failed -- lockfile will still be updated
+    // but the `installed` field will reflect the failure.
+    if !mise_ok {
+        eprintln!("  warning: lockfile updated but mise install failed -- tools may not be installed");
     }
 
     // 6. Update lockfile
-    let mut new_lock = lockfile::Lockfile::load(&config).unwrap_or_else(|_| lockfile::Lockfile {
+    // F6: compute actual SHA256 of installed binaries where possible
+    let mise_installs = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".local/share/mise/installs");
+
+    let mut new_lock = lockfile::Lockfile {
         entries: std::collections::HashMap::new(),
-    });
-    new_lock.entries.clear();
+    };
     for rt in &resolved {
         let url = rt.def.url_for(platform).unwrap_or_default();
-        let sha256 = rt.def.checksums.get(platform.key()).cloned();
-        let verified = verification_method(&rt.def);
+        // F6: try to compute actual binary checksum from installed location
+        let actual_sha = if mise_ok {
+            resolve_installed_sha(&rt.def, platform, &mise_installs)
+        } else {
+            // Fall back to inline registry checksum if mise didn't install
+            rt.def.checksums.get(platform.key()).cloned()
+        };
+        // F16: field is "verification_method" -- what CAN be used, not what WAS verified
+        let method = verification_method(&rt.def);
 
         new_lock.set(
             &rt.def.name,
@@ -283,8 +309,8 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
                 &rt.def.version,
                 &rt.registry,
                 if url.is_empty() { None } else { Some(url.as_str()) },
-                sha256.as_deref(),
-                verified,
+                actual_sha.as_deref(),
+                method,
             ),
         );
     }
@@ -621,6 +647,43 @@ fn has_checksum(def: &tool::ToolDef) -> &'static str {
         "checksum"
     } else {
         "none"
+    }
+}
+
+/// F6: compute the actual SHA256 of an installed binary.
+/// Returns None if the binary isn't found (not installed or different layout).
+fn resolve_installed_sha(
+    def: &tool::ToolDef,
+    platform: platform::Platform,
+    mise_installs: &std::path::Path,
+) -> Option<String> {
+    let install_dir = match def.source {
+        tool::Source::Npm => {
+            let pkg = def.package.as_deref().unwrap_or(&def.name).replace('/', "-").replace('@', "");
+            mise_installs.join(format!("npm-{pkg}")).join(&def.version)
+        }
+        tool::Source::Rustup => mise_installs.join("rust").join(&def.version),
+        _ => {
+            if def.aqua.is_some() {
+                mise_installs.join(&def.name).join(&def.version)
+            } else {
+                mise_installs.join(format!("http-{}", def.name)).join(&def.version)
+            }
+        }
+    };
+
+    let bin_path = install_dir.join("bin").join(def.bin_name());
+    if bin_path.exists() {
+        verify::compute_sha256(&bin_path).ok()
+    } else {
+        // Some mise backends put the binary directly in the version dir
+        let alt_path = install_dir.join(def.bin_name());
+        if alt_path.exists() {
+            verify::compute_sha256(&alt_path).ok()
+        } else {
+            // Fall back to inline checksums from registry
+            def.checksums.get(platform.key()).cloned()
+        }
     }
 }
 

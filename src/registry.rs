@@ -66,8 +66,14 @@ pub fn ensure_registry(config: &Config, reg: &Registry) -> Result<PathBuf> {
 
     if dest.join(".git").exists() {
         eprintln!("  pulling {}", reg.name);
-        pull(&dest, &reg.branch)
-            .with_context(|| format!("failed to update registry '{}'", reg.name))?;
+        // F19: if --ff-only pull fails (e.g. force-pushed remote), re-clone from scratch
+        if let Err(e) = pull(&dest, &reg.branch) {
+            eprintln!("  pull failed ({e:#}), re-cloning from scratch");
+            std::fs::remove_dir_all(&dest)
+                .with_context(|| format!("failed to remove {}", dest.display()))?;
+            clone(&reg.url, &dest, &reg.branch)
+                .with_context(|| format!("failed to re-clone registry '{}'", reg.name))?;
+        }
     } else {
         // Remove the directory if it exists but isn't a valid git repo
         // (e.g. partial clone that was interrupted).

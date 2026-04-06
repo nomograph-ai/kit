@@ -2,10 +2,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use crate::platform::Platform;
 
 // -- Validation patterns (security-critical: S-3, S-10) --
+// F17: compile regexes once via LazyLock, not on every validate() call.
 
 /// Tool names: lowercase alphanumeric + hyphens, must start with alphanumeric.
 pub const NAME_PATTERN: &str = r"^[a-z0-9][a-z0-9-]*$";
@@ -24,6 +26,18 @@ const TAG_PREFIX_PATTERN: &str = r"^[a-zA-Z0-9._-]*$";
 
 /// Asset names: safe filename characters only. No path separators.
 const ASSET_PATTERN: &str = r"^[a-zA-Z0-9_.{}\-]+$";
+
+/// Branch names: alphanumeric, hyphens, slashes, dots (F9).
+const BRANCH_PATTERN: &str = r"^[a-zA-Z0-9._/\-]+$";
+
+// F17: compiled regex statics -- avoids recompilation in hot loops
+static NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(NAME_PATTERN).unwrap());
+static BIN_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(BIN_PATTERN).unwrap());
+static VERSION_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(VERSION_PATTERN).unwrap());
+static REPO_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(REPO_PATTERN).unwrap());
+static ASSET_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(ASSET_PATTERN).unwrap());
+static TAG_PREFIX_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(TAG_PREFIX_PATTERN).unwrap());
+static BRANCH_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(BRANCH_PATTERN).unwrap());
 
 /// Trust tiers control review policy for updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,9 +169,25 @@ pub struct ToolFile {
 
 /// Validate a tool name against NAME_PATTERN. Public for use by commands.
 pub fn validate_name(name: &str) -> Result<()> {
-    let re = regex::Regex::new(NAME_PATTERN).unwrap();
-    if !re.is_match(name) {
+    if !NAME_RE.is_match(name) {
         anyhow::bail!("invalid tool name '{name}': must match {NAME_PATTERN}");
+    }
+    Ok(())
+}
+
+/// Validate a branch name (F9). Public for config validation.
+pub fn validate_branch(branch: &str) -> Result<()> {
+    if !BRANCH_RE.is_match(branch) {
+        anyhow::bail!("invalid branch name '{branch}': must match {BRANCH_PATTERN}");
+    }
+    Ok(())
+}
+
+/// F10: Validate a checksum filename after template expansion.
+#[allow(dead_code)]
+pub fn validate_checksum_filename(filename: &str) -> Result<()> {
+    if !ASSET_RE.is_match(filename) {
+        anyhow::bail!("invalid checksum filename '{filename}': must match {ASSET_PATTERN}");
     }
     Ok(())
 }
@@ -228,10 +258,16 @@ impl ToolDef {
     }
 
     /// Resolve the checksum file URL for a platform.
+    /// F10: validates the expanded filename against ASSET_PATTERN.
     pub fn checksum_url(&self) -> Option<String> {
         let cfg = self.checksum.as_ref()?;
         let file = cfg.file.as_ref()?;
         let filename = file.replace("{version}", &self.version);
+        // F10: validate expanded checksum filename
+        if !ASSET_RE.is_match(&filename) {
+            eprintln!("  warning: invalid checksum filename '{filename}', skipping");
+            return None;
+        }
         let tag = self.tag();
 
         match self.source {
@@ -261,20 +297,14 @@ impl ToolDef {
     /// Validate all fields against security patterns.
     /// This is the security-critical boundary (S-3, S-10).
     pub fn validate(&self) -> Result<()> {
-        let name_re = regex::Regex::new(NAME_PATTERN).unwrap();
-        let bin_re = regex::Regex::new(BIN_PATTERN).unwrap();
-        let version_re = regex::Regex::new(VERSION_PATTERN).unwrap();
-        let repo_re = regex::Regex::new(REPO_PATTERN).unwrap();
-        let asset_re = regex::Regex::new(ASSET_PATTERN).unwrap();
-
-        if !name_re.is_match(&self.name) {
+        if !NAME_RE.is_match(&self.name) {
             anyhow::bail!(
                 "invalid tool name '{}': must match {NAME_PATTERN}",
                 self.name
             );
         }
 
-        if !version_re.is_match(&self.version) {
+        if !VERSION_RE.is_match(&self.version) {
             anyhow::bail!(
                 "invalid version '{}' for {}: must match {VERSION_PATTERN}",
                 self.version,
@@ -282,9 +312,7 @@ impl ToolDef {
             );
         }
 
-        // Finding 4: validate tag_prefix to prevent URL manipulation
-        let tag_prefix_re = regex::Regex::new(TAG_PREFIX_PATTERN).unwrap();
-        if !tag_prefix_re.is_match(&self.tag_prefix) {
+        if !TAG_PREFIX_RE.is_match(&self.tag_prefix) {
             anyhow::bail!(
                 "invalid tag_prefix '{}' for {}: must match {TAG_PREFIX_PATTERN}",
                 self.tag_prefix,
@@ -307,7 +335,7 @@ impl ToolDef {
         }
 
         if let Some(ref bin) = self.bin
-            && !bin_re.is_match(bin)
+            && !BIN_RE.is_match(bin)
         {
             anyhow::bail!(
                 "invalid bin name '{}' for {}: must match {BIN_PATTERN}",
@@ -317,7 +345,7 @@ impl ToolDef {
         }
 
         if let Some(ref repo) = self.repo
-            && !repo_re.is_match(repo)
+            && !REPO_RE.is_match(repo)
         {
             anyhow::bail!(
                 "invalid repo '{}' for {}: must match {REPO_PATTERN}",
@@ -336,7 +364,7 @@ impl ToolDef {
                 );
             }
             // For direct sources, assets are full URLs -- skip pattern check
-            if self.source != Source::Direct && !asset_re.is_match(asset) {
+            if self.source != Source::Direct && !ASSET_RE.is_match(asset) {
                 anyhow::bail!(
                     "invalid asset name '{}' for {} ({}): must match {ASSET_PATTERN}",
                     asset,

@@ -21,8 +21,9 @@ pub struct LockEntry {
     /// SHA-256 checksum of the installed binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-    /// Verification method used: "cosign", "attestation", "checksum", or "none".
-    pub verified: String,
+    /// F16: verification method available (not necessarily executed).
+    /// Values: "cosign", "attestation", "checksum", or "none".
+    pub verification_method: String,
     /// ISO 8601 timestamp of last update.
     pub updated: String,
 }
@@ -220,14 +221,14 @@ pub fn new_entry(
     registry: &str,
     url: Option<&str>,
     sha256: Option<&str>,
-    verified: &str,
+    verification_method: &str,
 ) -> LockEntry {
     LockEntry {
         version: version.to_string(),
         registry: registry.to_string(),
         url: url.map(String::from),
         sha256: sha256.map(String::from),
-        verified: verified.to_string(),
+        verification_method: verification_method.to_string(),
         updated: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     }
 }
@@ -352,7 +353,7 @@ mod tests {
             registry: registry.to_string(),
             url: Some("https://example.com/tool".to_string()),
             sha256: sha256.map(String::from),
-            verified: "checksum".to_string(),
+            verification_method: "checksum".to_string(),
             updated: "2026-04-06T14:30:00Z".to_string(),
         }
     }
@@ -534,7 +535,7 @@ mod tests {
                                 .to_string(),
                         ),
                         sha256: Some("abc123".to_string()),
-                        verified: "checksum".to_string(),
+                        verification_method: "checksum".to_string(),
                         updated: "2026-04-06T14:30:00Z".to_string(),
                     },
                 ),
@@ -545,7 +546,7 @@ mod tests {
                         registry: "dunn".to_string(),
                         url: None,
                         sha256: None,
-                        verified: "cosign".to_string(),
+                        verification_method: "cosign".to_string(),
                         updated: "2026-04-06T14:30:00Z".to_string(),
                     },
                 ),
