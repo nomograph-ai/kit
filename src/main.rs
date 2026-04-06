@@ -1,13 +1,15 @@
+mod ci;
 mod config;
 mod lockfile;
 mod mise;
 mod platform;
 mod registry;
+mod source;
 mod tool;
 mod verify;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -127,6 +129,13 @@ enum Commands {
         #[arg(long, default_value = "my-registry")]
         name: String,
     },
+
+    /// Generate shell completions
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate for
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> Result<()> {
@@ -155,7 +164,14 @@ fn main() -> Result<()> {
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
         Commands::Apply { input } => cmd_apply(&input),
         Commands::Init { ci, name } => cmd_init(ci, &name),
+        Commands::Completions { shell } => cmd_completions(shell),
     }
+}
+
+fn cmd_completions(shell: clap_complete::Shell) -> Result<()> {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "kit", &mut std::io::stdout());
+    Ok(())
 }
 
 fn cmd_setup() -> Result<()> {
@@ -450,22 +466,99 @@ fn cmd_add(
         (tool::Source::Github, source.map(|s| s.to_string()), None)
     };
 
+    // Query upstream for version, assets, and checksum info.
+    let upstream = match source_type {
+        tool::Source::Github => {
+            let repo_str = source
+                .ok_or_else(|| anyhow::anyhow!("GitHub source requires owner/repo argument"))?;
+            eprint!("  querying GitHub {repo_str}... ");
+            match source::query_github(repo_str) {
+                Ok(info) => {
+                    eprintln!("ok ({})", info.version);
+                    Some(info)
+                }
+                Err(e) => {
+                    eprintln!("failed ({e:#})");
+                    eprintln!("  falling back to skeleton definition");
+                    None
+                }
+            }
+        }
+        tool::Source::Gitlab => {
+            let repo_str = source.unwrap_or("");
+            eprint!("  querying GitLab... ");
+            match source::query_gitlab(repo_str, project_id) {
+                Ok(info) => {
+                    eprintln!("ok ({})", info.version);
+                    Some(info)
+                }
+                Err(e) => {
+                    eprintln!("failed ({e:#})");
+                    eprintln!("  falling back to skeleton definition");
+                    None
+                }
+            }
+        }
+        tool::Source::Npm => {
+            let pkg_name = source.unwrap_or(name);
+            eprint!("  querying npm {pkg_name}... ");
+            match source::query_npm(pkg_name) {
+                Ok(info) => {
+                    eprintln!("ok ({})", info.version);
+                    Some(info)
+                }
+                Err(e) => {
+                    eprintln!("failed ({e:#})");
+                    eprintln!("  falling back to skeleton definition");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    // Build the tool definition, populated from upstream when available.
+    let (version, tag_prefix, assets, checksum) = match &upstream {
+        Some(info) => {
+            let templated_assets = source::templatize_assets(&info.assets, &info.version);
+            let checksum_cfg = info.checksum_file.as_ref().map(|f| tool::ChecksumConfig {
+                file: Some(source::templatize_checksum(f, &info.version)),
+                format: info
+                    .checksum_format
+                    .clone()
+                    .unwrap_or(tool::ChecksumFormat::Sha256),
+            });
+            (
+                info.version.clone(),
+                info.tag_prefix.clone(),
+                templated_assets,
+                checksum_cfg,
+            )
+        }
+        None => (
+            "0.0.0".to_string(),
+            "v".to_string(),
+            std::collections::HashMap::new(),
+            None,
+        ),
+    };
+
     let file = tool::ToolFile {
         tool: tool::ToolDef {
             name: name.to_string(),
             description: None,
             source: source_type,
-            version: "0.0.0".to_string(),
-            tag_prefix: "v".to_string(),
+            version,
+            tag_prefix,
             bin: Some(name.to_string()),
             tier: tool::Tier::Low,
-            repo,
+            repo: repo.clone(),
             project_id,
             package: pkg,
             crate_name: None,
             aqua: None,
-            assets: std::collections::HashMap::new(),
-            checksum: None,
+            assets,
+            checksum,
             checksums: std::collections::HashMap::new(),
             signature: None,
         },
@@ -473,15 +566,41 @@ fn cmd_add(
 
     let content = format!(
         "# Tool definition for {name}\n\
-         # Edit version, assets, and checksum config, then `kit push {name}`\n\n\
+         # Review the detected values, then `kit push {name}`\n\n\
          {}",
         toml::to_string_pretty(&file)?
     );
 
     std::fs::create_dir_all(&tools_dir)?;
     std::fs::write(&tool_path, content)?;
-    eprintln!("Created {}", tool_path.display());
-    eprintln!("Edit the definition, then run `kit push {name}`");
+
+    eprintln!("\nCreated {}", tool_path.display());
+
+    // Print what was detected for user verification.
+    if let Some(info) = &upstream {
+        eprintln!("\n  Detected from upstream:");
+        eprintln!("    version:     {}", info.version);
+        eprintln!("    tag_prefix:  {:?}", info.tag_prefix);
+        if let Some(a) = info.assets.get("macos-arm64") {
+            eprintln!("    macos-arm64: {a}");
+        }
+        if let Some(a) = info.assets.get("linux-x64") {
+            eprintln!("    linux-x64:   {a}");
+        }
+        if let Some(f) = &info.checksum_file {
+            eprintln!("    checksum:    {f}");
+        }
+        let missing: Vec<&str> = ["macos-arm64", "linux-x64"]
+            .iter()
+            .filter(|p| !info.assets.contains_key(**p))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            eprintln!("    warning: no assets detected for: {}", missing.join(", "));
+        }
+    }
+
+    eprintln!("\nReview the definition, then run `kit push {name}`");
     Ok(())
 }
 
@@ -576,19 +695,19 @@ fn cmd_unpin(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_check(_registry: Option<&std::path::Path>, _output: &std::path::Path) -> Result<()> {
-    eprintln!("kit check: CI command -- requires registry migration (Phase 3)");
-    Ok(())
+fn cmd_check(registry: Option<&std::path::Path>, output: &std::path::Path) -> Result<()> {
+    let registry_dir = registry
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    ci::check(&registry_dir, output)
 }
 
-fn cmd_evaluate(_input: &std::path::Path, _output: &std::path::Path) -> Result<()> {
-    eprintln!("kit evaluate: CI command -- requires registry migration (Phase 3)");
-    Ok(())
+fn cmd_evaluate(input: &std::path::Path, output: &std::path::Path) -> Result<()> {
+    ci::evaluate(input, output)
 }
 
-fn cmd_apply(_input: &std::path::Path) -> Result<()> {
-    eprintln!("kit apply: CI command -- requires registry migration (Phase 3)");
-    Ok(())
+fn cmd_apply(input: &std::path::Path) -> Result<()> {
+    ci::apply(input)
 }
 
 fn cmd_init(ci: bool, name: &str) -> Result<()> {
