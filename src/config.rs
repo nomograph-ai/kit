@@ -25,9 +25,6 @@ pub struct Settings {
     /// Cache directory for registry clones.
     #[serde(default = "default_cache_dir")]
     pub cache_dir: String,
-    /// Enforce signature verification on sync.
-    #[serde(default = "default_true")]
-    pub verify_signatures: bool,
     /// Trusted config paths for mise settings section.
     #[serde(default)]
     pub trusted_config_paths: Vec<String>,
@@ -39,7 +36,6 @@ impl Default for Settings {
             mise_config: default_mise_config(),
             platform: None,
             cache_dir: default_cache_dir(),
-            verify_signatures: true,
             trusted_config_paths: vec![],
         }
     }
@@ -51,10 +47,6 @@ fn default_mise_config() -> String {
 
 fn default_cache_dir() -> String {
     "~/.cache/kit".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// A named git-based tool registry.
