@@ -313,7 +313,7 @@ release:
       cosign verify-blob \
         --bundle kit-darwin-arm64.bundle \
         --certificate-oidc-issuer https://gitlab.com \
-        --certificate-identity-regexp 'https://gitlab.com/dunn.dev/kit/cli' \
+        --certificate-identity-regexp 'https://gitlab.com/nomograph/kit' \
         kit-darwin-arm64
       ```
     assets:

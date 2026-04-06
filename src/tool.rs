@@ -619,7 +619,7 @@ mod tests {
             signature: Some(SignatureConfig {
                 method: SignatureMethod::CosignKeyless,
                 issuer: Some("https://gitlab.com".to_string()),
-                identity: Some("https://gitlab.com/dunn.dev/muxr".to_string()),
+                identity: Some("https://gitlab.com/nomograph/muxr".to_string()),
             }),
         };
 
