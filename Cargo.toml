@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 toml_edit = "0.22"
@@ -25,7 +26,7 @@ dirs = "6"
 git2 = { version = "0.20", features = ["vendored-libgit2"] }
 sha2 = "0.10"
 hex = "0.4"
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 shellexpand = "3"
