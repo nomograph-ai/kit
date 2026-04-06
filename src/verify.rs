@@ -233,7 +233,7 @@ pub fn verify_cosign(
         .arg(&bundle_path)
         .arg("--certificate-oidc-issuer")
         .arg(issuer)
-        .arg("--certificate-identity-regexp")
+        .arg("--certificate-identity")
         .arg(identity)
         .arg(binary_path)
         .output()

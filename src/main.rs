@@ -202,6 +202,25 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     // 3. Load existing lockfile and check integrity
     let old_lock = lockfile::Lockfile::load(&config)?;
 
+    // S-2: ALWAYS check integrity, even when diff shows no version changes.
+    // A compromised registry could change only the checksum (same version).
+    // This check must run unconditionally -- it is the primary supply chain defense.
+    for rt in &resolved {
+        let sha = rt.def.checksums.get(platform.key());
+        let result = old_lock.check_integrity(
+            &rt.def.name,
+            &rt.def.version,
+            sha.map(|s| s.as_str()),
+        );
+        if result == lockfile::IntegrityResult::ChecksumChanged {
+            anyhow::bail!(
+                "SUPPLY CHAIN ALERT: {} has same version but different checksum. \
+                 This may indicate a compromised upstream release. Aborting.",
+                rt.def.name
+            );
+        }
+    }
+
     // Build the new-resolved tuples for diff
     let new_tuples: Vec<(String, String, String)> = resolved
         .iter()
@@ -213,23 +232,6 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         eprintln!("\n  Changes:");
         for change in &changes {
             eprintln!("    {change}");
-        }
-
-        // S-2: same version + changed checksum = supply chain attack
-        for rt in &resolved {
-            let sha = rt.def.checksums.get(platform.key());
-            let result = old_lock.check_integrity(
-                &rt.def.name,
-                &rt.def.version,
-                sha.map(|s| s.as_str()),
-            );
-            if result == lockfile::IntegrityResult::ChecksumChanged {
-                anyhow::bail!(
-                    "SUPPLY CHAIN ALERT: {} has same version but different checksum. \
-                     This may indicate a compromised upstream release. Aborting.",
-                    rt.def.name
-                );
-            }
         }
 
         // S-9: registry migration requires confirmation
@@ -394,6 +396,7 @@ fn cmd_add(
     project_id: Option<u64>,
     npm: bool,
 ) -> Result<()> {
+    tool::validate_name(name)?;
     let config = config::Config::load()?;
 
     let reg = config
@@ -454,6 +457,7 @@ fn cmd_add(
 }
 
 fn cmd_push(name: &str) -> Result<()> {
+    tool::validate_name(name)?;
     let config = config::Config::load()?;
 
     let reg = config
@@ -487,7 +491,8 @@ fn cmd_push(name: &str) -> Result<()> {
 
     let sig = repo
         .signature()
-        .unwrap_or_else(|_| git2::Signature::now("kit", "kit@localhost").unwrap());
+        .or_else(|_| git2::Signature::now("kit", "kit@localhost"))
+        .context("failed to create git signature")?;
 
     let message = format!("kit: add {name}");
     repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&head])?;
@@ -558,6 +563,8 @@ fn cmd_apply(_input: &std::path::Path) -> Result<()> {
 }
 
 fn cmd_init(ci: bool, name: &str) -> Result<()> {
+    tool::validate_name(name)
+        .context("invalid registry name (must be lowercase alphanumeric + hyphens)")?;
     let tools_dir = std::path::Path::new("tools");
     if tools_dir.exists() {
         anyhow::bail!("tools/ directory already exists");
