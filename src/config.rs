@@ -162,11 +162,13 @@ impl Config {
         }
     }
 
-    /// Validate the config (security-critical: S-5).
+    /// Validate the config (security-critical: S-5, F9).
     fn validate(&self) -> Result<()> {
         for reg in &self.registry {
             validate_registry_url(&reg.url)
                 .with_context(|| format!("invalid URL for registry '{}'", reg.name))?;
+            crate::tool::validate_branch(&reg.branch)
+                .with_context(|| format!("invalid branch for registry '{}'", reg.name))?;
         }
         Ok(())
     }
