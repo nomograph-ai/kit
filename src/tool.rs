@@ -8,16 +8,19 @@ use crate::platform::Platform;
 // -- Validation patterns (security-critical: S-3, S-10) --
 
 /// Tool names: lowercase alphanumeric + hyphens, must start with alphanumeric.
-const NAME_PATTERN: &str = r"^[a-z0-9][a-z0-9-]*$";
+pub const NAME_PATTERN: &str = r"^[a-z0-9][a-z0-9-]*$";
 
 /// Bin names: alphanumeric + underscores + hyphens.
 const BIN_PATTERN: &str = r"^[a-zA-Z0-9_-]+$";
 
 /// Version strings: digits, dots, hyphens, plus, alpha.
-const VERSION_PATTERN: &str = r"^[0-9][0-9a-zA-Z._+\-]*$";
+pub const VERSION_PATTERN: &str = r"^[0-9][0-9a-zA-Z._+\-]*$";
 
 /// Repo paths: owner/repo with safe characters.
 const REPO_PATTERN: &str = r"^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$";
+
+/// Tag prefixes: alphanumeric, dots, hyphens. Empty string allowed.
+const TAG_PREFIX_PATTERN: &str = r"^[a-zA-Z0-9._-]*$";
 
 /// Asset names: safe filename characters only. No path separators.
 const ASSET_PATTERN: &str = r"^[a-zA-Z0-9_.{}\-]+$";
@@ -150,6 +153,15 @@ pub struct ToolFile {
     pub tool: ToolDef,
 }
 
+/// Validate a tool name against NAME_PATTERN. Public for use by commands.
+pub fn validate_name(name: &str) -> Result<()> {
+    let re = regex::Regex::new(NAME_PATTERN).unwrap();
+    if !re.is_match(name) {
+        anyhow::bail!("invalid tool name '{name}': must match {NAME_PATTERN}");
+    }
+    Ok(())
+}
+
 impl ToolDef {
     /// Parse and validate a tool definition from a TOML file.
     pub fn load(path: &Path) -> Result<Self> {
@@ -268,6 +280,30 @@ impl ToolDef {
                 self.version,
                 self.name
             );
+        }
+
+        // Finding 4: validate tag_prefix to prevent URL manipulation
+        let tag_prefix_re = regex::Regex::new(TAG_PREFIX_PATTERN).unwrap();
+        if !tag_prefix_re.is_match(&self.tag_prefix) {
+            anyhow::bail!(
+                "invalid tag_prefix '{}' for {}: must match {TAG_PREFIX_PATTERN}",
+                self.tag_prefix,
+                self.name
+            );
+        }
+
+        // Finding 11: validate direct source URLs are HTTPS
+        if self.source == Source::Direct {
+            for (platform, url) in &self.assets {
+                let expanded = url.replace("{version}", &self.version);
+                if !expanded.to_lowercase().starts_with("https://") {
+                    anyhow::bail!(
+                        "direct source URL for {} ({}) must use https://",
+                        self.name,
+                        platform
+                    );
+                }
+            }
         }
 
         if let Some(ref bin) = self.bin
@@ -391,6 +427,12 @@ pub fn load_registry_tools(registry_dir: &Path) -> Result<Vec<ToolDef>> {
     {
         let entry = entry?;
         let path = entry.path();
+
+        // Finding 3: reject symlinks to prevent path traversal from malicious registries
+        if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(false) {
+            eprintln!("  warning: skipping symlink {}", path.display());
+            continue;
+        }
 
         // Skip _meta.toml and non-TOML files
         if path.file_name().map(|n| n == "_meta.toml").unwrap_or(false) {

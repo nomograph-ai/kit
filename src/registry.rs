@@ -141,6 +141,7 @@ pub fn apply_pins(
     config: &Config,
 ) -> Result<()> {
     let registry_base = config.registry_dir()?;
+    let version_re = regex::Regex::new(crate::tool::VERSION_PATTERN).unwrap();
 
     for (tool_name, pin) in pins {
         if let Some(ref pin_registry) = pin.registry {
@@ -197,6 +198,14 @@ pub fn apply_pins(
                 resolved.push(new_entry);
             }
         } else if let Some(ref version) = pin.version {
+            // Finding 15: validate pinned version before applying
+            if !version_re.is_match(version) {
+                anyhow::bail!(
+                    "invalid pin version '{}' for '{}'",
+                    version,
+                    tool_name
+                );
+            }
             // Version-only pin: update in place.
             if let Some(existing) = resolved.iter_mut().find(|r| r.def.name == *tool_name) {
                 existing.def.version = version.clone();
