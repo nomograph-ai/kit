@@ -184,7 +184,7 @@ fn cmd_setup() -> Result<()> {
 
     let config = config::Config::default_with_registry(
         "dunn",
-        "https://gitlab.com/dunn.dev/kit/registry.git",
+        "https://gitlab.com/nomograph/kits.git",
     );
     config.save()?;
     eprintln!("Created {}", config_path.display());
