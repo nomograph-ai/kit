@@ -283,7 +283,9 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     }
 
     // 6. Update lockfile
-    // F6: compute actual SHA256 of installed binaries where possible
+    // T3-1: store registry checksums and binary checksums separately.
+    // Registry checksums (archive hashes) are used by S-2 integrity checks.
+    // Binary checksums (F6) are computed from installed binaries.
     let mise_installs = dirs::home_dir()
         .unwrap_or_default()
         .join(".local/share/mise/installs");
@@ -293,14 +295,14 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     };
     for rt in &resolved {
         let url = rt.def.url_for(platform).unwrap_or_default();
-        // F6: try to compute actual binary checksum from installed location
-        let actual_sha = if mise_ok {
+        // Registry inline checksum (archive hash) -- for S-2 comparison
+        let registry_sha = rt.def.checksums.get(platform.key()).map(|s| s.as_str());
+        // F6: compute actual binary checksum from installed location
+        let binary_sha = if mise_ok {
             resolve_installed_sha(&rt.def, platform, &mise_installs)
         } else {
-            // Fall back to inline registry checksum if mise didn't install
-            rt.def.checksums.get(platform.key()).cloned()
+            None
         };
-        // F16: field is "verification_method" -- what CAN be used, not what WAS verified
         let method = verification_method(&rt.def);
 
         new_lock.set(
@@ -309,7 +311,8 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
                 &rt.def.version,
                 &rt.registry,
                 if url.is_empty() { None } else { Some(url.as_str()) },
-                actual_sha.as_deref(),
+                registry_sha,
+                binary_sha.as_deref(),
                 method,
             ),
         );
