@@ -1,6 +1,6 @@
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
-  - component: gitlab.com/nomograph/ci/rust-cli@main
+  - component: gitlab.com/nomograph/ci/rust-cli@v0.1.0
     inputs:
       binary_name: kit
       project_description: "Verified tool registry manager. Manages developer toolchains from git-based registries."
