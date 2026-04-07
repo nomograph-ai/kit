@@ -166,12 +166,21 @@ pub fn resolve_expected_checksum(
             .with_context(|| format!("failed to download checksum file: {checksum_url}"))?;
 
         if !resp.status().is_success() {
+            let status = resp.status();
+            let reason = if status == reqwest::StatusCode::FORBIDDEN
+                && checksum_url.contains("gitlab.com/api/v4/projects/")
+                && checksum_url.contains("/packages/")
+            {
+                format!(
+                    "checksum file download failed: HTTP {} -- check that packages_enabled is true on the project",
+                    status
+                )
+            } else {
+                format!("checksum file download failed: HTTP {}", status)
+            };
             return Ok(VerifyResult::Failed {
                 method: "sha256".to_string(),
-                reason: format!(
-                    "checksum file download failed: HTTP {}",
-                    resp.status()
-                ),
+                reason,
             });
         }
 
