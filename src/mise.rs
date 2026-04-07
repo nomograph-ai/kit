@@ -490,6 +490,215 @@ mod tests {
         );
     }
 
+    /// Integration test: write real TOML tool files to disk, load them via
+    /// `load_registry_tools`, resolve across registries, generate mise config,
+    /// then parse the output back and verify structure.
+    ///
+    /// This exercises the full pipeline (TOML files -> parse -> resolve ->
+    /// generate -> valid TOML) rather than constructing ToolDef structs in Rust.
+    #[test]
+    fn integration_toml_files_to_mise_config() {
+        use crate::config::{Registry, Settings};
+        use crate::registry::resolve_tools;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path();
+        let reg_dir = cache.join("registries").join("integ");
+        let tools_dir = reg_dir.join("tools");
+        std::fs::create_dir_all(&tools_dir).unwrap();
+
+        // -- Write _meta.toml --
+        std::fs::write(
+            tools_dir.join("_meta.toml"),
+            r#"[registry]
+name = "integ"
+description = "integration test registry"
+"#,
+        )
+        .unwrap();
+
+        // -- Tool 1: GitHub with aqua (flat entry) --
+        std::fs::write(
+            tools_dir.join("gh.toml"),
+            r#"[tool]
+name = "gh"
+source = "github"
+version = "2.89.0"
+tag_prefix = "v"
+bin = "gh"
+tier = "high"
+repo = "cli/cli"
+aqua = "cli/cli"
+
+[tool.assets]
+macos-arm64 = "gh_{version}_macOS_arm64.zip"
+linux-x64 = "gh_{version}_linux_amd64.tar.gz"
+"#,
+        )
+        .unwrap();
+
+        // -- Tool 2: GitLab own tool with project_id (http backend) --
+        std::fs::write(
+            tools_dir.join("muxr.toml"),
+            r#"[tool]
+name = "muxr"
+source = "gitlab"
+version = "0.6.3"
+tag_prefix = "v"
+bin = "muxr"
+tier = "own"
+project_id = 80663080
+
+[tool.assets]
+macos-arm64 = "muxr-darwin-arm64"
+linux-x64 = "muxr-linux-amd64"
+
+[tool.checksum]
+file = "checksums.txt"
+format = "sha256"
+"#,
+        )
+        .unwrap();
+
+        // -- Tool 3: npm package (flat entry with npm: prefix) --
+        std::fs::write(
+            tools_dir.join("claude-code.toml"),
+            r#"[tool]
+name = "claude-code"
+source = "npm"
+version = "2.1.92"
+tier = "high"
+package = "@anthropic-ai/claude-code"
+"#,
+        )
+        .unwrap();
+
+        // -- Tool 4: Rustup (flat entry with rust key) --
+        std::fs::write(
+            tools_dir.join("rust.toml"),
+            r#"[tool]
+name = "rust"
+source = "rustup"
+version = "1.93.0"
+tier = "high"
+"#,
+        )
+        .unwrap();
+
+        // -- Tool 5: GitHub without aqua (github: prefix) --
+        std::fs::write(
+            tools_dir.join("dolt.toml"),
+            r#"[tool]
+name = "dolt"
+source = "github"
+version = "1.50.5"
+tag_prefix = "v"
+tier = "low"
+repo = "dolthub/dolt"
+
+[tool.assets]
+macos-arm64 = "dolt-darwin-arm64"
+linux-x64 = "dolt-linux-amd64"
+"#,
+        )
+        .unwrap();
+
+        // -- Build config pointing at the test registry --
+        let config = Config {
+            settings: Settings {
+                cache_dir: cache.to_string_lossy().to_string(),
+                trusted_config_paths: vec!["~/projects".to_string()],
+                ..Settings::default()
+            },
+            registry: vec![Registry {
+                name: "integ".to_string(),
+                url: "https://example.com/integ.git".to_string(),
+                branch: "main".to_string(),
+                readonly: true,
+            }],
+            pins: HashMap::new(),
+        };
+
+        // -- Resolve tools from disk --
+        let resolved = resolve_tools(&config).unwrap();
+        assert_eq!(resolved.len(), 5, "should resolve all 5 tools from disk");
+
+        // -- Generate mise config --
+        let output = generate(&resolved, &config).unwrap();
+
+        // -- Parse it back -- the critical assertion: is it valid TOML? --
+        let parsed: DocumentMut = output
+            .parse()
+            .expect("generated config from real TOML files must be valid TOML");
+
+        let tools_table = parsed["tools"]
+            .as_table()
+            .expect("[tools] section must exist");
+
+        // Verify flat entries
+        assert_eq!(
+            tools_table["gh"].as_str(),
+            Some("2.89.0"),
+            "gh should be flat aqua entry"
+        );
+        assert_eq!(
+            tools_table["rust"].as_str(),
+            Some("1.93.0"),
+            "rust should be flat rustup entry"
+        );
+        assert!(
+            tools_table.contains_key("npm:@anthropic-ai/claude-code"),
+            "claude-code should have npm: prefix"
+        );
+        assert!(
+            tools_table.contains_key("github:dolthub/dolt"),
+            "dolt should have github: prefix"
+        );
+
+        // Verify http subtable for muxr
+        let muxr_table = tools_table["http:muxr"]
+            .as_table()
+            .expect("muxr should be an http subtable");
+        assert_eq!(muxr_table["version"].as_str(), Some("0.6.3"));
+        let platforms = muxr_table["platforms"]
+            .as_table()
+            .expect("muxr should have platforms");
+        assert!(
+            platforms.contains_key("macos-arm64"),
+            "muxr should have macos-arm64 platform"
+        );
+        assert!(
+            platforms.contains_key("linux-x64"),
+            "muxr should have linux-x64 platform"
+        );
+
+        // Verify settings section
+        let settings_table = parsed["settings"]
+            .as_table()
+            .expect("[settings] section must exist");
+        let paths = settings_table["trusted_config_paths"]
+            .as_array()
+            .expect("trusted_config_paths should be an array");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths.get(0).and_then(|v| v.as_str()), Some("~/projects"));
+
+        // Verify header comment
+        assert!(
+            output.starts_with("# Managed by kit"),
+            "output should start with managed-by header"
+        );
+
+        // Verify platform URLs contain expected patterns
+        assert!(
+            output.contains("projects/80663080/packages/generic/muxr/v0.6.3/muxr-darwin-arm64"),
+            "muxr macos URL should use generic package registry"
+        );
+        assert!(
+            output.contains("projects/80663080/packages/generic/muxr/v0.6.3/muxr-linux-amd64"),
+            "muxr linux URL should use generic package registry"
+        );
+    }
+
     #[test]
     fn direct_source_produces_http_backend() {
         let mut def = make_tool("custom-tool", Source::Direct, "3.0.0");

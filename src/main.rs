@@ -476,18 +476,63 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     registry::apply_pins(&mut resolved, &config.pins, &config)?;
     eprintln!("  resolved {} tools", resolved.len());
 
-    // 3. Load existing lockfile and check integrity
+    // 3. Resolve expected checksums for ALL tools (inline + checksum files).
+    // This must happen before generating mise config so that a tampered
+    // checksum is caught before any binaries are downloaded.
+    let mut registry_checksums: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let tools_with_checksums: Vec<&registry::ResolvedTool> = resolved
+        .iter()
+        .filter(|rt| {
+            rt.def.checksums.contains_key(platform.key())
+                || rt.def.checksum.is_some()
+        })
+        .collect();
+    if !tools_with_checksums.is_empty() {
+        eprintln!("  resolving checksums for {} tools...", tools_with_checksums.len());
+    }
+    for rt in &tools_with_checksums {
+        // Inline checksums are immediate; checksum files require HTTP.
+        if let Some(inline) = rt.def.checksums.get(platform.key()) {
+            registry_checksums.insert(rt.def.name.clone(), Some(inline.clone()));
+        } else {
+            // Download the checksum file for this tool+platform.
+            match verify::resolve_expected_checksum(&rt.def, platform) {
+                Ok(verify::VerifyResult::Verified { sha256, .. }) => {
+                    eprintln!("    {} checksum resolved", rt.def.name);
+                    registry_checksums.insert(rt.def.name.clone(), Some(sha256));
+                }
+                Ok(verify::VerifyResult::Failed { reason, .. }) => {
+                    eprintln!("    {} checksum FAILED: {}", rt.def.name, reason);
+                    registry_checksums.insert(rt.def.name.clone(), None);
+                }
+                Ok(verify::VerifyResult::Unavailable { reason }) => {
+                    eprintln!("    {} checksum unavailable: {}", rt.def.name, reason);
+                    registry_checksums.insert(rt.def.name.clone(), None);
+                }
+                Err(e) => {
+                    eprintln!("    {} checksum error: {:#}", rt.def.name, e);
+                    registry_checksums.insert(rt.def.name.clone(), None);
+                }
+            }
+        }
+    }
+
+    // 4. Load existing lockfile and check integrity
     let old_lock = lockfile::Lockfile::load(&config)?;
 
     // S-2: ALWAYS check integrity, even when diff shows no version changes.
     // A compromised registry could change only the checksum (same version).
     // This check must run unconditionally -- it is the primary supply chain defense.
+    // Uses resolved checksums (inline + downloaded) so ALL tools are covered.
     for rt in &resolved {
-        let sha = rt.def.checksums.get(platform.key());
+        let sha = registry_checksums
+            .get(&rt.def.name)
+            .and_then(|opt| opt.as_deref());
         let result = old_lock.check_integrity(
             &rt.def.name,
             &rt.def.version,
-            sha.map(|s| s.as_str()),
+            sha,
         );
         if result == lockfile::IntegrityResult::ChecksumChanged {
             anyhow::bail!(
@@ -524,7 +569,7 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         eprintln!("  no changes");
     }
 
-    // 4. Generate mise config (S-3: uses toml crate, not string interpolation)
+    // 5. Generate mise config (S-3: uses toml crate, not string interpolation)
     let mise_content = mise::generate(&resolved, &config)?;
     let mise_path = config.mise_config_path()?;
     if let Some(parent) = mise_path.parent() {
@@ -533,7 +578,7 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     std::fs::write(&mise_path, &mise_content)?;
     eprintln!("  wrote {}", mise_path.display());
 
-    // 5. Run mise install
+    // 6. Run mise install
     eprint!("  running mise install... ");
     let mise_ok = match std::process::Command::new("mise")
         .args(["install", "--yes"])
@@ -559,9 +604,9 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         eprintln!("  warning: lockfile updated but mise install failed -- tools may not be installed");
     }
 
-    // 6. Update lockfile
+    // 7. Update lockfile
     // T3-1: store registry checksums and binary checksums separately.
-    // Registry checksums (archive hashes) are used by S-2 integrity checks.
+    // Registry checksums (inline + downloaded) are used by S-2 integrity checks.
     // Binary checksums (F6) are computed from installed binaries.
     let mise_installs = dirs::home_dir()
         .unwrap_or_default()
@@ -572,8 +617,10 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     };
     for rt in &resolved {
         let url = rt.def.url_for(platform).unwrap_or_default();
-        // Registry inline checksum (archive hash) -- for S-2 comparison
-        let registry_sha = rt.def.checksums.get(platform.key()).map(|s| s.as_str());
+        // Registry checksum (inline or downloaded) -- for S-2 comparison
+        let registry_sha = registry_checksums
+            .get(&rt.def.name)
+            .and_then(|opt| opt.as_deref());
         // F6: compute actual binary checksum from installed location
         let binary_sha = if mise_ok {
             resolve_installed_sha(&rt.def, platform, &mise_installs)

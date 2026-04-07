@@ -7,6 +7,7 @@
 //! 4. Git add, commit, push to a new branch
 //! 5. Create MR via glab CLI
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -77,34 +78,19 @@ pub fn apply(input: &Path) -> Result<()> {
         let raw = std::fs::read_to_string(&tool_path)
             .with_context(|| format!("failed to read {}", tool_path.display()))?;
 
-        let mut doc = raw
-            .parse::<toml_edit::DocumentMut>()
-            .with_context(|| format!("failed to parse {} as TOML", tool_path.display()))?;
+        let updated = update_tool_toml(&raw, new_version, &update.candidate.checksums)
+            .with_context(|| format!("failed to update {}", tool_path.display()))?;
 
-        // Update version
-        if let Some(tool_table) = doc.get_mut("tool").and_then(|t| t.as_table_mut()) {
-            tool_table["version"] = toml_edit::value(new_version.as_str());
-
-            // Update inline checksums if present and we have new ones
-            let checksums = &update.candidate.checksums;
-            if !checksums.is_empty()
-                && let Some(checksums_table) =
-                    tool_table.get_mut("checksums").and_then(|t| t.as_table_mut())
-            {
-                for (platform, sha) in checksums {
-                    if let Some(hash) = sha {
-                        checksums_table[platform.as_str()] =
-                            toml_edit::value(hash.as_str());
-                    }
-                }
+        match updated {
+            Some(new_content) => {
+                std::fs::write(&tool_path, new_content)
+                    .with_context(|| format!("failed to write {}", tool_path.display()))?;
             }
-        } else {
-            eprintln!("  warning: no [tool] table in {name}.toml, skipping");
-            continue;
+            None => {
+                eprintln!("  warning: no [tool] table in {name}.toml, skipping");
+                continue;
+            }
         }
-
-        std::fs::write(&tool_path, doc.to_string())
-            .with_context(|| format!("failed to write {}", tool_path.display()))?;
 
         applied_names.push(name.clone());
     }
@@ -277,6 +263,57 @@ pub fn apply(input: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Update a tool TOML string with a new version and checksums.
+///
+/// Returns `Some(new_content)` on success, or `None` if the TOML has no
+/// `[tool]` table.
+fn update_tool_toml(
+    raw: &str,
+    new_version: &str,
+    checksums: &HashMap<String, Option<String>>,
+) -> Result<Option<String>> {
+    let mut doc = raw
+        .parse::<toml_edit::DocumentMut>()
+        .context("failed to parse TOML")?;
+
+    let tool_table = match doc.get_mut("tool").and_then(|t| t.as_table_mut()) {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    tool_table["version"] = toml_edit::value(new_version);
+
+    // Update inline checksums from the check phase.
+    // Filter to only platforms that have a computed hash (Some).
+    let new_hashes: Vec<_> = checksums
+        .iter()
+        .filter_map(|(platform, sha)| {
+            sha.as_ref().map(|hash| (platform.as_str(), hash.as_str()))
+        })
+        .collect();
+
+    if !new_hashes.is_empty() {
+        // Create the [tool.checksums] table if it doesn't exist yet.
+        if tool_table.get("checksums").is_none() {
+            tool_table.insert(
+                "checksums",
+                toml_edit::Item::Table(toml_edit::Table::new()),
+            );
+        }
+
+        if let Some(checksums_table) = tool_table
+            .get_mut("checksums")
+            .and_then(|t| t.as_table_mut())
+        {
+            for (platform, hash) in &new_hashes {
+                checksums_table[*platform] = toml_edit::value(*hash);
+            }
+        }
+    }
+
+    Ok(Some(doc.to_string()))
+}
+
 /// Run a git command in the current directory.
 fn run_git(args: &[&str]) -> Result<()> {
     let output = Command::new("git")
@@ -295,4 +332,154 @@ fn run_git(args: &[&str]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_version_and_existing_checksums() {
+        let input = r#"[tool]
+name = "muxr"
+version = "0.6.0"
+
+[tool.checksums]
+macos-arm64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+linux-x64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"#;
+
+        let checksums = HashMap::from([
+            (
+                "macos-arm64".to_string(),
+                Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string()),
+            ),
+            (
+                "linux-x64".to_string(),
+                Some("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string()),
+            ),
+        ]);
+
+        let result = update_tool_toml(input, "0.7.0", &checksums).unwrap().unwrap();
+
+        assert!(result.contains("version = \"0.7.0\""), "version should be updated");
+        assert!(
+            result.contains("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            "macos checksum should be updated"
+        );
+        assert!(
+            !result.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            "old macos checksum should be replaced"
+        );
+    }
+
+    #[test]
+    fn create_checksums_table_when_missing() {
+        let input = r#"[tool]
+name = "muxr"
+version = "0.6.0"
+source = "gitlab"
+"#;
+
+        let checksums = HashMap::from([(
+            "macos-arm64".to_string(),
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()),
+        )]);
+
+        let result = update_tool_toml(input, "0.7.0", &checksums).unwrap().unwrap();
+
+        assert!(result.contains("version = \"0.7.0\""), "version should be updated");
+        assert!(
+            result.contains("[tool.checksums]"),
+            "checksums table should be created"
+        );
+        assert!(
+            result.contains("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            "checksum should be written"
+        );
+    }
+
+    #[test]
+    fn skip_checksums_when_empty() {
+        let input = r#"[tool]
+name = "claude-code"
+version = "1.0.0"
+source = "npm"
+"#;
+
+        let checksums = HashMap::new();
+
+        let result = update_tool_toml(input, "1.1.0", &checksums).unwrap().unwrap();
+
+        assert!(result.contains("version = \"1.1.0\""), "version should be updated");
+        assert!(
+            !result.contains("checksums"),
+            "no checksums table should be created when map is empty"
+        );
+    }
+
+    #[test]
+    fn skip_none_checksums() {
+        let input = r#"[tool]
+name = "test"
+version = "1.0.0"
+"#;
+
+        // Only None values -- download failed for all platforms
+        let checksums = HashMap::from([
+            ("macos-arm64".to_string(), None),
+            ("linux-x64".to_string(), None),
+        ]);
+
+        let result = update_tool_toml(input, "1.1.0", &checksums).unwrap().unwrap();
+
+        assert!(result.contains("version = \"1.1.0\""), "version should be updated");
+        assert!(
+            !result.contains("checksums"),
+            "no checksums table when all values are None"
+        );
+    }
+
+    #[test]
+    fn returns_none_without_tool_table() {
+        let input = r#"[something]
+key = "value"
+"#;
+
+        let result = update_tool_toml(input, "1.0.0", &HashMap::new()).unwrap();
+        assert!(result.is_none(), "should return None without [tool] table");
+    }
+
+    #[test]
+    fn preserves_formatting_and_other_fields() {
+        let input = r#"[tool]
+name = "gh"
+description = "GitHub CLI"
+version = "2.89.0"
+source = "github"
+repo = "cli/cli"
+tier = "high"
+
+[tool.checksums]
+macos-arm64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+
+        let checksums = HashMap::from([(
+            "macos-arm64".to_string(),
+            Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string()),
+        )]);
+
+        let result = update_tool_toml(input, "2.90.0", &checksums).unwrap().unwrap();
+
+        assert!(result.contains("name = \"gh\""), "name preserved");
+        assert!(result.contains("description = \"GitHub CLI\""), "description preserved");
+        assert!(result.contains("source = \"github\""), "source preserved");
+        assert!(result.contains("repo = \"cli/cli\""), "repo preserved");
+        assert!(result.contains("tier = \"high\""), "tier preserved");
+        assert!(result.contains("version = \"2.90.0\""), "version updated");
+        assert!(
+            result.contains("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+            "checksum updated"
+        );
+    }
 }
