@@ -1,0 +1,21 @@
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"
+     font-family="'Courier New', monospace">
+  <rect x="0" y="0" width="256" height="256" fill="#faf6ed"/>
+  <rect x="20" y="20" width="216" height="216" fill="none"
+        stroke="#2c2417" stroke-width="4"/>
+  <rect x="28" y="28" width="200" height="36" fill="#2c2417"/>
+  <text x="128" y="53" text-anchor="middle" font-size="20"
+        fill="#faf6ed" font-weight="bold">kit</text>
+
+  <!-- Shield with checkmark: verified supply chain -->
+  <!-- Shield outline -->
+  <path d="M 128 85 L 170 100 L 170 155 Q 170 185, 128 205 Q 86 185, 86 155 L 86 100 Z"
+        fill="none" stroke="#2c2417" stroke-width="3"/>
+  <!-- Checkmark -->
+  <polyline points="107,145 122,165 153,125"
+            fill="none" stroke="#2c2417" stroke-width="4"
+            stroke-linecap="round" stroke-linejoin="round"/>
+
+  <line x1="60" y1="228" x2="196" y2="228" stroke="#c4b99a"
+        stroke-width="2"/>
+</svg>
