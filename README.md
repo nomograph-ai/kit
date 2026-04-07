@@ -2,6 +2,10 @@
 
 # kit
 
+[![pipeline](https://gitlab.com/nomograph/kit/badges/main/pipeline.svg)](https://gitlab.com/nomograph/kit/-/pipelines)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)
+
 Verified tool registry manager -- manages developer toolchains from
 git-based registries.
 
