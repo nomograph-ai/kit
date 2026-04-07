@@ -221,6 +221,7 @@ pub fn apply(input: &Path) -> Result<()> {
             });
 
             let client = reqwest::blocking::Client::builder()
+                .https_only(true)
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .context("failed to create HTTP client")?;
