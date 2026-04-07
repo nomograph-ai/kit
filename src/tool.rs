@@ -502,7 +502,6 @@ pub fn load_registry_tools(registry_dir: &Path) -> Result<Vec<ToolDef>> {
 }
 
 /// Load registry metadata from _meta.toml.
-#[allow(dead_code)]
 pub fn load_registry_meta(registry_dir: &Path) -> Result<RegistryMeta> {
     let path = registry_dir.join("tools").join("_meta.toml");
     if !path.exists() {
