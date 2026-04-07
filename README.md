@@ -1,68 +1,54 @@
-![hero](hero.svg)
-
 # kit
 
+[![crates.io](https://img.shields.io/crates/v/nomograph-kit)](https://crates.io/crates/nomograph-kit)
 [![pipeline](https://gitlab.com/nomograph/kit/badges/main/pipeline.svg)](https://gitlab.com/nomograph/kit/-/pipelines)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)
 
 Verified tool registry manager -- manages developer toolchains from
 git-based registries.
 
 kit resolves tool versions across multiple registries, generates
 [mise](https://mise.jdx.dev) configuration, verifies checksums and
-signatures, and automates upstream update tracking.
+cosign signatures, and automates upstream update tracking.
 
 ## Install
 
-### From source
-
 ```bash
-cargo install --git https://gitlab.com/nomograph/kit.git
+cargo install nomograph-kit
 ```
 
-### From release (mise)
-
-```toml
-[tools."http:kit"]
-version = "0.1.0"
-
-[tools."http:kit".platforms]
-macos-arm64 = { url = "https://gitlab.com/api/v4/projects/81066225/packages/generic/kit/v0.1.0/kit-darwin-arm64", bin = "kit" }
-linux-x64 = { url = "https://gitlab.com/api/v4/projects/81066225/packages/generic/kit/v0.1.0/kit-linux-amd64", bin = "kit" }
-```
-
-### Manual
-
-```bash
-curl -L "https://gitlab.com/api/v4/projects/81066225/packages/generic/kit/v0.1.0/kit-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o kit
-chmod +x kit
-```
+The binary is called `kit`.
 
 ## Quick start
 
 ```bash
-kit setup          # creates ~/.config/kit/config.toml with default registry
-kit sync           # pull tools, generate mise config, install, verify
-kit status         # show all tools with versions and drift
+kit setup --registry https://gitlab.com/your/registry.git
+kit sync
+kit status
 ```
 
 ## Commands
 
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `kit setup` | One-time config creation |
+| `kit setup` | One-time config, optionally add a registry |
 | `kit sync` | Pull registries, resolve, generate mise config, install |
-| `kit status` | Show installed vs registry, drift detection |
-| `kit verify` | Re-verify all installed binaries (checksums + signatures) |
-| `kit add <name> <source>` | Add a tool definition to a writable registry |
+| `kit status` | Installed vs registry, drift detection, verification strength |
+| `kit diff` | Show changes between lockfile and registry |
+| `kit upgrade` | Interactive tool update workflow |
+| `kit verify` | Re-verify all installed binaries (cosign + checksums) |
+| `kit audit` | Check tools for known security advisories |
+| `kit add <name> <source>` | Query upstream, generate tool definition |
 | `kit push <name>` | Commit and push a tool definition |
+| `kit remove <name>` | Remove a tool from a writable registry |
 | `kit pin <name> <version>` | Pin a tool's version locally |
 | `kit unpin <name>` | Remove a local pin |
-| `kit init [--ci]` | Scaffold a new registry |
-| `kit check` | Check upstream for newer versions (CI mode) |
-| `kit evaluate` | LLM evaluation of edge cases (CI mode) |
+| `kit check` | Scan upstream for newer versions (CI mode) |
+| `kit evaluate` | LLM review for edge cases (CI mode) |
 | `kit apply` | Apply updates, create MR (CI mode) |
+| `kit init [--ci]` | Scaffold a new registry |
+| `kit completions <shell>` | Shell completions (bash/zsh/fish) |
+| `kit man-page` | Generate man page |
 
 ## Registries
 
@@ -101,14 +87,25 @@ format = "sha256"
 method = "github-attestation"
 ```
 
+Sources: `github`, `gitlab`, `npm`, `crates`, `direct`, `rustup`
+
+Smart `kit add` queries upstream and auto-populates:
+
+```bash
+kit add jq jqlang/jq              # GitHub
+kit add muxr nomograph/muxr --gitlab  # GitLab (resolves project_id)
+kit add claude-code --npm @anthropic-ai/claude-code
+kit add cargo-nextest --crates
+```
+
 ## Multi-registry
 
 Configure multiple registries in `~/.config/kit/config.toml`. First
-registry wins when tools overlap. Local pins override registry versions.
+registry wins when tools overlap. Local pins override.
 
 ```toml
 [[registry]]
-name = "dunn"
+name = "nomograph"
 url = "https://gitlab.com/nomograph/kits.git"
 
 [[registry]]
@@ -121,22 +118,18 @@ readonly = true
 
 kit is a supply chain tool. Security is enforced at every layer:
 
-- **Input validation**: tool names, versions, repos, asset names, URLs,
-  checksums all validated against strict patterns
-- **TOML injection prevention**: mise config built via toml_edit API,
-  never string interpolation
-- **Registry URL restriction**: only https:// and git@ allowed
-- **Supply chain attack detection**: same version + changed checksum
-  triggers hard stop (S-2)
-- **Dependency confusion prevention**: registry migration requires
-  explicit confirmation (S-9)
-- **Cosign verification**: exact certificate identity match, not regexp
-- **Symlink rejection**: malicious registries cannot use symlinks to
-  escape the tools/ directory
+- **Input validation**: all fields validated against strict regex patterns
+- **TOML injection prevention**: mise config built via toml_edit API
+- **Supply chain attack detection**: same version + changed checksum = hard stop
+- **Dependency confusion prevention**: registry migration requires confirmation
+- **Cosign verification**: anchored certificate identity match
+- **Registry URL restriction**: https:// and git@ only
+- **Symlink rejection**: malicious registries cannot escape tools/ directory
+- **HTTPS-only**: all HTTP clients enforce TLS
 
-38 security findings identified and addressed across 3 adversarial
+46 security findings identified and addressed across 5 adversarial
 review passes.
 
 ## License
 
-MIT
+MIT -- [Nomograph](https://gitlab.com/nomograph)
