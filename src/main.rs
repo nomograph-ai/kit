@@ -76,6 +76,12 @@ enum Commands {
         name: String,
     },
 
+    /// Remove a tool from a writable registry
+    Remove {
+        /// Tool name
+        name: String,
+    },
+
     /// Pin a tool's version or registry source locally
     Pin {
         /// Tool name
@@ -120,6 +126,9 @@ enum Commands {
         input: PathBuf,
     },
 
+    /// Check installed tools for known security advisories
+    Audit,
+
     /// Initialize a new registry
     Init {
         /// Include CI automation template
@@ -154,12 +163,14 @@ fn main() -> Result<()> {
             npm,
         } => cmd_add(&name, source.as_deref(), gitlab, project_id, npm),
         Commands::Push { name } => cmd_push(&name),
+        Commands::Remove { name } => cmd_remove(&name),
         Commands::Pin {
             name,
             version,
             registry,
         } => cmd_pin(&name, version.as_deref(), registry.as_deref()),
         Commands::Unpin { name } => cmd_unpin(&name),
+        Commands::Audit => cmd_audit(),
         Commands::Check { registry, output } => cmd_check(registry.as_deref(), &output),
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
         Commands::Apply { input } => cmd_apply(&input),
@@ -391,23 +402,29 @@ fn cmd_verify() -> Result<()> {
 
     for rt in &resolved {
         eprint!("  {:<20} {:<12} ", rt.def.name, rt.def.version);
-        // Resolve mise install dir for this tool
-        let mise_dir = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".local/share/mise/installs");
-        // mise installs http: backends under http-<name>/<version>
-        let tool_install_dir = match rt.def.source {
-            tool::Source::Npm => mise_dir.join(format!("npm-{}", rt.def.package.as_deref().unwrap_or(&rt.def.name).replace('/', "-").replace('@', ""))).join(&rt.def.version),
-            tool::Source::Rustup => mise_dir.join("rust").join(&rt.def.version),
-            _ => {
-                if rt.def.aqua.is_some() {
-                    mise_dir.join(&rt.def.name).join(&rt.def.version)
-                } else {
-                    mise_dir.join(format!("http-{}", rt.def.name)).join(&rt.def.version)
-                }
+
+        // Tools installed via package managers (npm, crates, rustup) don't have
+        // download URLs for checksum verification -- skip them early.
+        if matches!(
+            rt.def.source,
+            tool::Source::Npm | tool::Source::Crates | tool::Source::Rustup
+        ) {
+            eprintln!("skip  (package-manager install, no binary checksum)");
+            skip += 1;
+            continue;
+        }
+
+        // Resolve the binary path via `mise which`.
+        let binary_path = match verify::resolve_binary_path(&rt.def) {
+            Some(p) => p,
+            None => {
+                eprintln!("skip  (binary not found via mise)");
+                skip += 1;
+                continue;
             }
         };
-        match verify::verify_tool(&rt.def, platform, &tool_install_dir) {
+
+        match verify::verify_tool(&rt.def, platform, &binary_path) {
             Ok(verify::VerifyResult::Verified { method, .. }) => {
                 eprintln!("ok  ({method})");
                 pass += 1;
@@ -660,6 +677,227 @@ fn cmd_push(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn cmd_remove(name: &str) -> Result<()> {
+    tool::validate_name(name)?;
+    let config = config::Config::load()?;
+
+    let reg = config
+        .registry
+        .iter()
+        .find(|r| !r.readonly)
+        .ok_or_else(|| anyhow::anyhow!("no writable registry configured"))?;
+
+    let registry_dir = config.registry_dir()?.join(&reg.name);
+    let tool_path = registry_dir.join("tools").join(format!("{name}.toml"));
+
+    if !tool_path.exists() {
+        anyhow::bail!("{name}.toml not found in registry {}", reg.name);
+    }
+
+    std::fs::remove_file(&tool_path)
+        .with_context(|| format!("failed to delete {}", tool_path.display()))?;
+
+    // Git add + commit + push (same pattern as cmd_push)
+    let relative = std::path::Path::new("tools").join(format!("{name}.toml"));
+    let add_status = std::process::Command::new("git")
+        .args(["add", &relative.to_string_lossy()])
+        .current_dir(&registry_dir)
+        .status()
+        .context("failed to run git add")?;
+    if !add_status.success() {
+        anyhow::bail!("git add failed for {name}.toml");
+    }
+
+    let message = format!("kit: remove {name}");
+    let commit_status = std::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(&registry_dir)
+        .status()
+        .context("failed to run git commit")?;
+    if !commit_status.success() {
+        anyhow::bail!("git commit failed for {name}.toml");
+    }
+
+    let status = std::process::Command::new("git")
+        .args(["push", "--quiet", "origin", &reg.branch])
+        .current_dir(&registry_dir)
+        .status()
+        .context("failed to run git push")?;
+
+    if !status.success() {
+        anyhow::bail!("git push failed for registry {}", reg.name);
+    }
+
+    eprintln!("Removed {name} from {}", reg.name);
+    Ok(())
+}
+
+fn cmd_audit() -> Result<()> {
+    let config = config::Config::load()?;
+
+    let mut resolved = registry::resolve_tools(&config)?;
+    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+
+    eprintln!("kit audit: checking {} tools for security advisories\n", resolved.len());
+
+    let mut findings: Vec<(String, String, ci::Advisory)> = Vec::new();
+
+    for rt in &resolved {
+        eprint!("  {:<20} {:<12} ", rt.def.name, rt.def.version);
+
+        let advs = match rt.def.source {
+            tool::Source::Github => audit_github(&rt.def),
+            tool::Source::Npm => audit_npm(&rt.def),
+            _ => {
+                eprintln!("skip (no advisory source for {:?})", rt.def.source);
+                continue;
+            }
+        };
+
+        match advs {
+            Ok(ref list) if list.is_empty() => {
+                eprintln!("ok");
+            }
+            Ok(list) => {
+                eprintln!("{} advisory(ies)", list.len());
+                for a in list {
+                    findings.push((rt.def.name.clone(), rt.def.version.clone(), a));
+                }
+            }
+            Err(e) => {
+                eprintln!("error ({e:#})");
+            }
+        }
+    }
+
+    if findings.is_empty() {
+        eprintln!("\nNo advisories found.");
+        return Ok(());
+    }
+
+    eprintln!("\n{}", "=".repeat(80));
+    eprintln!(
+        "  {:<20} {:<12} {:<20} {:<12} SUMMARY",
+        "TOOL", "VERSION", "CVE", "SEVERITY"
+    );
+    eprintln!("{}", "-".repeat(80));
+    for (tool_name, version, adv) in &findings {
+        let summary = &adv.summary;
+        eprintln!(
+            "  {tool_name:<20} {version:<12} {:<20} {:<12} {summary}",
+            adv.id, adv.severity
+        );
+    }
+    eprintln!("{}", "=".repeat(80));
+    eprintln!("{} advisory(ies) found.", findings.len());
+
+    let has_critical = findings
+        .iter()
+        .any(|(_, _, a)| a.severity == "high" || a.severity == "critical");
+
+    if has_critical {
+        anyhow::bail!("high or critical advisories found -- action required");
+    }
+
+    Ok(())
+}
+
+/// Query GitHub Advisory Database for a GitHub-sourced tool.
+fn audit_github(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
+    let repo = def
+        .repo
+        .as_deref()
+        .context("github source requires 'repo' field")?;
+
+    let version = &def.version;
+    let jq_filter = format!(
+        r#"[.[] | select(.vulnerabilities[]?.vulnerable_version_range | test("{version}"))]"#
+    );
+
+    let output = std::process::Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{repo}/security-advisories"),
+            "--jq",
+            &jq_filter,
+        ])
+        .output()
+        .context("failed to execute gh")?;
+
+    if !output.status.success() {
+        // Some repos have no advisories endpoint -- not an error
+        return Ok(vec![]);
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "[]" || trimmed == "null" {
+        return Ok(vec![]);
+    }
+
+    let raw: Vec<serde_json::Value> = serde_json::from_str(trimmed).unwrap_or_default();
+
+    Ok(raw
+        .iter()
+        .map(|a| ci::Advisory {
+            id: a["ghsa_id"].as_str().unwrap_or("?").to_string(),
+            severity: a["severity"].as_str().unwrap_or("?").to_string(),
+            summary: a["summary"]
+                .as_str()
+                .unwrap_or("?")
+                .chars()
+                .take(200)
+                .collect(),
+        })
+        .collect())
+}
+
+/// Query GitHub Advisory Database for an npm package.
+fn audit_npm(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
+    let pkg = def.package.as_deref().unwrap_or(&def.name);
+    let version = &def.version;
+
+    let output = std::process::Command::new("gh")
+        .args([
+            "api",
+            &format!(
+                "/advisories?ecosystem=npm&package={pkg}&affects={version}"
+            ),
+        ])
+        .output()
+        .context("failed to execute gh")?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "[]" || trimmed == "null" {
+        return Ok(vec![]);
+    }
+
+    let raw: Vec<serde_json::Value> = serde_json::from_str(trimmed).unwrap_or_default();
+
+    Ok(raw
+        .iter()
+        .map(|a| ci::Advisory {
+            id: a["ghsa_id"]
+                .as_str()
+                .or_else(|| a["cve_id"].as_str())
+                .unwrap_or("?")
+                .to_string(),
+            severity: a["severity"].as_str().unwrap_or("?").to_string(),
+            summary: a["summary"]
+                .as_str()
+                .unwrap_or("?")
+                .chars()
+                .take(200)
+                .collect(),
+        })
+        .collect())
+}
+
 fn cmd_pin(name: &str, version: Option<&str>, registry: Option<&str>) -> Result<()> {
     let mut config = config::Config::load()?;
 
@@ -777,36 +1015,15 @@ fn has_checksum(def: &tool::ToolDef) -> &'static str {
 fn resolve_installed_sha(
     def: &tool::ToolDef,
     platform: platform::Platform,
-    mise_installs: &std::path::Path,
+    _mise_installs: &std::path::Path,
 ) -> Option<String> {
-    let install_dir = match def.source {
-        tool::Source::Npm => {
-            let pkg = def.package.as_deref().unwrap_or(&def.name).replace('/', "-").replace('@', "");
-            mise_installs.join(format!("npm-{pkg}")).join(&def.version)
-        }
-        tool::Source::Rustup => mise_installs.join("rust").join(&def.version),
-        _ => {
-            if def.aqua.is_some() {
-                mise_installs.join(&def.name).join(&def.version)
-            } else {
-                mise_installs.join(format!("http-{}", def.name)).join(&def.version)
-            }
-        }
-    };
-
-    let bin_path = install_dir.join("bin").join(def.bin_name());
-    if bin_path.exists() {
-        verify::compute_sha256(&bin_path).ok()
-    } else {
-        // Some mise backends put the binary directly in the version dir
-        let alt_path = install_dir.join(def.bin_name());
-        if alt_path.exists() {
-            verify::compute_sha256(&alt_path).ok()
-        } else {
-            // Fall back to inline checksums from registry
-            def.checksums.get(platform.key()).cloned()
-        }
+    // Use `mise which` for authoritative binary resolution.
+    if let Some(bin_path) = verify::resolve_binary_path(def) {
+        return verify::compute_sha256(&bin_path).ok();
     }
+
+    // Fall back to inline checksums from registry if binary not found.
+    def.checksums.get(platform.key()).cloned()
 }
 
 const CI_TEMPLATE: &str = r#"# kit registry CI automation
