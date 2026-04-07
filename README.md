@@ -1,3 +1,5 @@
+![hero](hero.svg)
+
 # kit
 
 Verified tool registry manager -- manages developer toolchains from
