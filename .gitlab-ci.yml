@@ -1,10 +1,11 @@
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
-  - component: gitlab.com/nomograph/pipeline/rust-cli@v2.1.0
+  - component: gitlab.com/nomograph/pipeline/rust-cli@v2.2.0
     inputs:
       binary_name: kit
       project_description: "Verified tool registry manager."
       audit_allow_failure: false
+      crates_publish: true
 
 stages: [test, build, sign, publish, release]
 

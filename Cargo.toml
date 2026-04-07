@@ -1,5 +1,5 @@
 [package]
-name = "kit"
+name = "nomograph-kit"
 version = "0.3.2"
 edition = "2024"
 description = "Verified tool registry manager -- manages developer toolchains from git-based registries"
