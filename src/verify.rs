@@ -228,14 +228,21 @@ pub fn verify_cosign(
     std::fs::write(&bundle_path, &bundle_bytes)
         .context("failed to write cosign bundle to temp file")?;
 
+    // GitLab CI cosign bundles embed the full pipeline identity as the
+    // certificate SAN, e.g. "https://gitlab.com/org/repo//.gitlab-ci.yml@refs/tags/v1.0.0".
+    // The tool definition stores only the project URL prefix (e.g.
+    // "https://gitlab.com/org/repo"). Use --certificate-identity-regexp
+    // to match the prefix, anchored so it cannot match unrelated projects.
+    let identity_pattern = format!("^{}(/.*)?$", regex::escape(identity));
+
     let output = Command::new("cosign")
         .arg("verify-blob")
         .arg("--bundle")
         .arg(&bundle_path)
         .arg("--certificate-oidc-issuer")
         .arg(issuer)
-        .arg("--certificate-identity")
-        .arg(identity)
+        .arg("--certificate-identity-regexp")
+        .arg(&identity_pattern)
         .arg(binary_path)
         .output()
         .context("failed to execute cosign -- is it installed?")?;
