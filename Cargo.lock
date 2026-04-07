@@ -700,28 +700,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kit"
-version = "0.3.2"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "clap_complete",
- "clap_mangen",
- "dirs",
- "hex",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "shellexpand",
- "tempfile",
- "toml",
- "toml_edit",
-]
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -781,6 +759,28 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nomograph-kit"
+version = "0.3.2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "clap_mangen",
+ "dirs",
+ "hex",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shellexpand",
+ "tempfile",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]
