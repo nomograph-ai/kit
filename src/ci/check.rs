@@ -103,8 +103,21 @@ pub fn check(registry_dir: &Path, output: &Path) -> Result<()> {
     eprintln!("Advisories: {}", result.advisories.len());
     eprintln!("Errors:  {}", result.errors.len());
 
-    if result.errors.iter().any(|e| e.contains("CHECKSUM MISMATCH")) {
-        anyhow::bail!("FATAL: Checksum mismatch detected.");
+    let mismatches: Vec<&String> = result
+        .errors
+        .iter()
+        .filter(|e| e.contains("CHECKSUM MISMATCH"))
+        .collect();
+
+    if !mismatches.is_empty() {
+        eprintln!("\nFATAL: {} checksum mismatch(es) detected:", mismatches.len());
+        for m in &mismatches {
+            eprintln!("  - {m}");
+        }
+        anyhow::bail!(
+            "{} tool(s) failed checksum verification -- possible supply chain compromise",
+            mismatches.len()
+        );
     }
 
     Ok(())
@@ -119,11 +132,17 @@ fn check_tool(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
         Source::Npm => check_npm(def),
         Source::Crates => check_crates(def),
         Source::Direct => {
-            eprintln!("  {}: direct source, skipping auto-check", def.name);
+            eprintln!(
+                "  {}: {} (skip -- direct source has no upstream release API to check)",
+                def.name, def.version
+            );
             Ok(None)
         }
         Source::Rustup => {
-            eprintln!("  {}: rustup-managed, skipping auto-check", def.name);
+            eprintln!(
+                "  {}: {} (skip -- version managed by rustup, not a registry release)",
+                def.name, def.version
+            );
             Ok(None)
         }
     }

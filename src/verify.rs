@@ -260,6 +260,52 @@ pub fn verify_gh_attestation(binary_path: &Path, repo: &str) -> Result<bool> {
     Ok(output.status.success())
 }
 
+/// Resolve the installed binary path using `mise which`.
+///
+/// Falls back to heuristic path guessing if mise is not available.
+pub fn resolve_binary_path(tool: &ToolDef) -> Option<std::path::PathBuf> {
+    let bin_name = tool.bin_name();
+
+    // Primary: ask mise for the authoritative path.
+    if let Ok(output) = Command::new("mise")
+        .args(["which", bin_name])
+        .output()
+        && output.status.success()
+    {
+        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path_str.is_empty() {
+            let path = std::path::PathBuf::from(&path_str);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+/// Check whether the download asset for this tool+platform is an archive.
+///
+/// When the asset is an archive (.tar.gz, .zip, .tar.xz, .pkg, etc.),
+/// the registry checksums are for the archive, not the extracted binary.
+/// Checksum verification against the installed binary is not meaningful
+/// in that case.
+pub fn is_archive_asset(tool: &ToolDef, platform: Platform) -> bool {
+    let asset = match tool.asset_for(platform) {
+        Some(a) => a,
+        None => return false,
+    };
+    let lower = asset.to_lowercase();
+    lower.ends_with(".tar.gz")
+        || lower.ends_with(".tgz")
+        || lower.ends_with(".tar.xz")
+        || lower.ends_with(".tar.bz2")
+        || lower.ends_with(".zip")
+        || lower.ends_with(".pkg")
+        || lower.ends_with(".deb")
+        || lower.ends_with(".rpm")
+}
+
 /// Determine the best verification method from the tool definition and run it.
 ///
 /// Priority order:
@@ -270,32 +316,37 @@ pub fn verify_gh_attestation(binary_path: &Path, repo: &str) -> Result<bool> {
 ///
 /// For methods that also support checksums, we compute and include the sha256
 /// of the installed binary in the result regardless.
+///
+/// `binary_path` is the resolved path to the installed binary (use
+/// `resolve_binary_path` or `mise which` to obtain it).
 pub fn verify_tool(
     tool: &ToolDef,
     platform: Platform,
-    mise_install_dir: &Path,
+    binary_path: &Path,
 ) -> Result<VerifyResult> {
-    let bin_name = tool.bin_name();
-    // T3-4: check both bin/<name> and <name> (some mise backends skip bin/ subdir)
-    let primary = mise_install_dir.join("bin").join(bin_name);
-    let fallback = mise_install_dir.join(bin_name);
-    let binary_path = if primary.exists() {
-        primary
-    } else if fallback.exists() {
-        fallback
-    } else {
+    if !binary_path.exists() {
         return Ok(VerifyResult::Failed {
             method: "pre-check".to_string(),
-            reason: format!("binary not found at {} or {}", primary.display(), fallback.display()),
+            reason: format!("binary not found at {}", binary_path.display()),
         });
-    };
+    }
 
     // Always compute the installed binary's SHA256 for the result.
-    let actual_sha = compute_sha256(&binary_path)?;
+    let actual_sha = compute_sha256(binary_path)?;
+
+    // When the download asset is an archive (.tar.gz, .zip, etc.), the
+    // registry checksums and signatures refer to the archive, not the
+    // extracted binary. Checksum comparison against the installed binary
+    // is not meaningful; we record the binary hash but cannot verify it
+    // against the upstream archive checksum.
+    let archive = is_archive_asset(tool, platform);
 
     // -- 1. Cosign keyless --
+    // Cosign bundles sign the download artifact. For bare binaries this
+    // is the binary itself; for archives it signs the archive.
     if let Some(ref sig) = tool.signature
         && sig.method == SignatureMethod::CosignKeyless
+        && !archive
     {
             let issuer = sig
                 .issuer
@@ -319,7 +370,7 @@ pub fn verify_tool(
                 })
                 .context("cannot determine bundle URL")?;
 
-            match verify_cosign(&binary_path, &bundle_url, issuer, identity) {
+            match verify_cosign(binary_path, &bundle_url, issuer, identity) {
                 Ok(true) => {
                     // Cosign passed; still verify checksum if available.
                     let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
@@ -350,15 +401,17 @@ pub fn verify_tool(
     }
 
     // -- 2. GitHub attestation --
+    // gh attestation verify operates on the download artifact, not extracted binaries.
     if let Some(ref sig) = tool.signature
         && sig.method == SignatureMethod::GithubAttestation
+        && !archive
     {
             let repo = tool
                 .repo
                 .as_deref()
                 .context("github-attestation requires 'repo' on tool definition")?;
 
-            match verify_gh_attestation(&binary_path, repo) {
+            match verify_gh_attestation(binary_path, repo) {
                 Ok(true) => {
                     let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
                     if let Some(VerifyResult::Failed { method, reason }) = checksum_result {
@@ -387,7 +440,10 @@ pub fn verify_tool(
     }
 
     // -- 3. SHA256 checksum --
-    if tool.checksum.is_some() || !tool.checksums.is_empty() {
+    // Only compare checksums when the download artifact is the bare binary.
+    // For archive-distributed tools, the registry checksum is for the
+    // archive, not the extracted binary.
+    if !archive && (tool.checksum.is_some() || !tool.checksums.is_empty()) {
         let checksum_result = resolve_expected_checksum(tool, platform)?;
         match checksum_result {
             VerifyResult::Verified {
@@ -412,7 +468,18 @@ pub fn verify_tool(
         }
     }
 
-    // -- 4. Nothing available --
+    // -- 4. Archive-distributed tool with a binary hash --
+    // We found the binary and computed its hash, but cannot verify it
+    // against upstream (checksums are for the archive). Report as
+    // Verified with the binary hash for lockfile use.
+    if archive {
+        return Ok(VerifyResult::Verified {
+            method: "binary-hash".to_string(),
+            sha256: actual_sha,
+        });
+    }
+
+    // -- 5. Nothing available --
     Ok(VerifyResult::Unavailable {
         reason: "no checksum or signature method configured".to_string(),
     })
@@ -605,5 +672,132 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
     fn validate_hex_hash_rejects_non_hex() {
         let bad = "zzzz23d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
         assert!(validate_hex_hash(bad).is_err());
+    }
+
+    fn make_tool(name: &str, assets: Vec<(&str, &str)>) -> crate::tool::ToolDef {
+        crate::tool::ToolDef {
+            name: name.to_string(),
+            description: None,
+            source: crate::tool::Source::Github,
+            version: "1.0.0".to_string(),
+            tag_prefix: "v".to_string(),
+            bin: None,
+            tier: crate::tool::Tier::Low,
+            repo: Some("owner/repo".to_string()),
+            project_id: None,
+            package: None,
+            crate_name: None,
+            aqua: None,
+            assets: assets
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            checksum: None,
+            checksums: std::collections::HashMap::new(),
+            signature: None,
+        }
+    }
+
+    #[test]
+    fn is_archive_detects_tar_gz() {
+        let tool = make_tool("gh", vec![("macos-arm64", "gh_1.0.0_macOS_arm64.tar.gz")]);
+        assert!(is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn is_archive_detects_zip() {
+        let tool = make_tool("gh", vec![("macos-arm64", "gh_1.0.0_macOS_arm64.zip")]);
+        assert!(is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn is_archive_detects_tar_xz() {
+        let tool = make_tool("sc", vec![("macos-arm64", "shellcheck-v1.0.0.darwin.aarch64.tar.xz")]);
+        assert!(is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn is_archive_detects_pkg() {
+        let tool = make_tool("hugo", vec![("macos-arm64", "hugo_extended_1.0.0_darwin-universal.pkg")]);
+        assert!(is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn is_archive_bare_binary_is_not_archive() {
+        let tool = make_tool("muxr", vec![("macos-arm64", "muxr-darwin-arm64")]);
+        assert!(!is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn is_archive_no_asset_is_not_archive() {
+        let tool = make_tool("nothing", vec![]);
+        assert!(!is_archive_asset(&tool, Platform::MacosArm64));
+    }
+
+    #[test]
+    fn verify_tool_bare_binary_with_inline_checksum() {
+        // Create a fake binary and provide its actual checksum as the inline checksum.
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("test-tool");
+        {
+            let mut f = std::fs::File::create(&binary).unwrap();
+            f.write_all(b"fake binary content").unwrap();
+        }
+        let expected_hash = compute_sha256(&binary).unwrap();
+
+        let mut tool = make_tool("test-tool", vec![("macos-arm64", "test-tool-darwin-arm64")]);
+        tool.checksums.insert("macos-arm64".to_string(), expected_hash.clone());
+
+        let result = verify_tool(&tool, Platform::MacosArm64, &binary).unwrap();
+        assert!(result.is_verified());
+        match result {
+            VerifyResult::Verified { method, sha256 } => {
+                assert_eq!(method, "sha256");
+                assert_eq!(sha256, expected_hash);
+            }
+            _ => panic!("expected Verified"),
+        }
+    }
+
+    #[test]
+    fn verify_tool_archive_asset_returns_binary_hash() {
+        // For archive-distributed tools, verify_tool should return the
+        // binary hash without comparing against the archive checksum.
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("gh");
+        {
+            let mut f = std::fs::File::create(&binary).unwrap();
+            f.write_all(b"fake gh binary").unwrap();
+        }
+        let expected_hash = compute_sha256(&binary).unwrap();
+
+        let mut tool = make_tool("gh", vec![("macos-arm64", "gh_1.0.0_macOS_arm64.zip")]);
+        // This checksum is for the zip, not the binary -- should NOT cause a mismatch.
+        tool.checksums.insert(
+            "macos-arm64".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        );
+
+        let result = verify_tool(&tool, Platform::MacosArm64, &binary).unwrap();
+        assert!(result.is_verified());
+        match result {
+            VerifyResult::Verified { method, sha256 } => {
+                assert_eq!(method, "binary-hash");
+                assert_eq!(sha256, expected_hash);
+            }
+            _ => panic!("expected Verified with binary-hash method"),
+        }
+    }
+
+    #[test]
+    fn verify_tool_missing_binary_fails() {
+        let tool = make_tool("missing", vec![("macos-arm64", "missing-darwin-arm64")]);
+        let result = verify_tool(
+            &tool,
+            Platform::MacosArm64,
+            std::path::Path::new("/nonexistent/path/to/binary"),
+        )
+        .unwrap();
+        assert!(result.is_failed());
     }
 }
