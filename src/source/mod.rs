@@ -57,6 +57,7 @@ static CHECKSUM_RE: LazyLock<regex::Regex> =
 
 /// Information discovered from an upstream release.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UpstreamInfo {
     /// Resolved version string (tag prefix stripped).
     pub version: String,
@@ -68,6 +69,10 @@ pub struct UpstreamInfo {
     pub checksum_file: Option<String>,
     /// Detected checksum format, if a checksum file was found.
     pub checksum_format: Option<ChecksumFormat>,
+    /// Resolved GitLab project ID (set by resolve_gitlab_project_id).
+    pub project_id: Option<u64>,
+    /// Detected signature method (e.g. "cosign-keyless" if .bundle files found).
+    pub signature_method: Option<String>,
 }
 
 // -- GitHub --
@@ -111,6 +116,7 @@ pub fn query_github(repo: &str) -> Result<UpstreamInfo> {
 
     let (assets, checksum_file) = detect_assets(&asset_names);
     let checksum_format = checksum_file.as_ref().map(|_| ChecksumFormat::Sha256);
+    let signature_method = detect_cosign_bundles(&asset_names, &assets);
 
     Ok(UpstreamInfo {
         version,
@@ -118,23 +124,37 @@ pub fn query_github(repo: &str) -> Result<UpstreamInfo> {
         assets,
         checksum_file,
         checksum_format,
+        project_id: None,
+        signature_method,
     })
 }
 
 // -- GitLab --
 
+/// Resolve a GitLab project's numeric ID from its path (e.g. "nomograph/muxr").
+///
+/// Shells out to `glab api projects/{encoded_path}` and extracts the `id` field.
+pub fn resolve_gitlab_project_id(repo: &str) -> Result<u64> {
+    validate_repo(repo)?;
+    let encoded = repo.replace('/', "%2F");
+    let output = run_command("glab", &["api", &format!("projects/{encoded}")])?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)?;
+    parsed["id"]
+        .as_u64()
+        .context("missing id in project response")
+}
+
 /// Query the latest GitLab release for a project.
 ///
-/// Accepts either a project path (owner/repo) or a numeric project ID.
+/// Accepts a project path (owner/repo). Resolves the numeric project ID
+/// automatically via the API.
 /// Shells out to `glab api projects/{encoded}/releases?per_page=1`.
-pub fn query_gitlab(repo: &str, project_id: Option<u64>) -> Result<UpstreamInfo> {
-    let project_ref = match project_id {
-        Some(id) => id.to_string(),
-        None => {
-            validate_repo(repo)?;
-            repo.replace('/', "%2F")
-        }
-    };
+pub fn query_gitlab(repo: &str) -> Result<UpstreamInfo> {
+    validate_repo(repo)?;
+
+    // Always resolve project_id from path.
+    let resolved_id = resolve_gitlab_project_id(repo)?;
+    let project_ref = resolved_id.to_string();
 
     let endpoint = format!("projects/{project_ref}/releases?per_page=1");
 
@@ -173,6 +193,7 @@ pub fn query_gitlab(repo: &str, project_id: Option<u64>) -> Result<UpstreamInfo>
 
     let (assets, checksum_file) = detect_assets(&asset_names);
     let checksum_format = checksum_file.as_ref().map(|_| ChecksumFormat::Sha256);
+    let signature_method = detect_cosign_bundles(&asset_names, &assets);
 
     Ok(UpstreamInfo {
         version,
@@ -180,6 +201,8 @@ pub fn query_gitlab(repo: &str, project_id: Option<u64>) -> Result<UpstreamInfo>
         assets,
         checksum_file,
         checksum_format,
+        project_id: Some(resolved_id),
+        signature_method,
     })
 }
 
@@ -218,6 +241,8 @@ pub fn query_npm(package: &str) -> Result<UpstreamInfo> {
         assets: HashMap::new(),
         checksum_file: None,
         checksum_format: None,
+        project_id: None,
+        signature_method: None,
     })
 }
 
@@ -365,6 +390,80 @@ pub fn templatize_assets(
 /// Replace a literal version string in a checksum filename with `{version}`.
 pub fn templatize_checksum(filename: &str, version: &str) -> String {
     filename.replace(version, "{version}")
+}
+
+/// Detect whether cosign bundle files exist alongside the platform binaries.
+///
+/// Returns `Some("cosign-keyless")` if any `{asset_name}.bundle` file exists
+/// in the full filename list for a detected platform asset.
+fn detect_cosign_bundles(
+    all_filenames: &[String],
+    platform_assets: &HashMap<String, String>,
+) -> Option<String> {
+    for asset_name in platform_assets.values() {
+        let bundle_name = format!("{asset_name}.bundle");
+        if all_filenames.iter().any(|f| f == &bundle_name) {
+            return Some("cosign-keyless".to_string());
+        }
+    }
+    None
+}
+
+/// Detect whether a tool is available in mise's aqua registry.
+///
+/// Tries `mise ls-remote <name>` and then `mise ls-remote <repo>` (for GitHub
+/// tools where the aqua identifier is the repo path). Returns the aqua
+/// identifier if the tool is found.
+#[allow(dead_code)]
+pub fn detect_aqua(name: &str, repo: Option<&str>) -> Option<String> {
+    // Try the tool name directly.
+    if let Ok(out) = Command::new("mise")
+        .args(["ls-remote", name])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        && out.status.success()
+        && !out.stdout.is_empty()
+    {
+        return Some(name.to_string());
+    }
+    // For GitHub tools, try the repo as aqua identifier.
+    if let Some(r) = repo
+        && let Ok(out) = Command::new("mise")
+            .args(["ls-remote", r])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+        && out.status.success()
+        && !out.stdout.is_empty()
+    {
+        return Some(r.to_string());
+    }
+    None
+}
+
+/// Extract the registry namespace from a registry URL.
+///
+/// Given "https://gitlab.com/nomograph/kits.git", returns "nomograph".
+/// Given "git@gitlab.com:nomograph/kits.git", returns "nomograph".
+#[allow(dead_code)]
+pub fn extract_registry_namespace(url: &str) -> Option<String> {
+    // HTTPS: https://gitlab.com/nomograph/kits.git -> nomograph
+    if let Some(rest) = url.strip_prefix("https://") {
+        // Split on '/' after the host: ["gitlab.com", "nomograph", "kits.git"]
+        let parts: Vec<&str> = rest.splitn(4, '/').collect();
+        if parts.len() >= 2 {
+            return Some(parts[1].to_string());
+        }
+    }
+    // SSH: git@gitlab.com:nomograph/kits.git -> nomograph
+    if url.starts_with("git@")
+        && let Some(path) = url.split(':').nth(1)
+        && let Some(ns) = path.split('/').next()
+    {
+        return Some(ns.to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -554,5 +653,61 @@ mod tests {
         assert!(is_checksum_file("gh_2.89.0_checksums.txt"));
         assert!(!is_checksum_file("tool-linux-amd64.tar.gz"));
         assert!(!is_checksum_file("readme.md"));
+    }
+
+    #[test]
+    fn detect_cosign_bundles_found() {
+        let all = vec![
+            "muxr-darwin-arm64".to_string(),
+            "muxr-darwin-arm64.bundle".to_string(),
+            "muxr-linux-amd64".to_string(),
+            "muxr-linux-amd64.bundle".to_string(),
+            "checksums.txt".to_string(),
+        ];
+        let mut assets = HashMap::new();
+        assets.insert("macos-arm64".to_string(), "muxr-darwin-arm64".to_string());
+        assets.insert("linux-x64".to_string(), "muxr-linux-amd64".to_string());
+        assert_eq!(
+            detect_cosign_bundles(&all, &assets),
+            Some("cosign-keyless".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_cosign_bundles_not_found() {
+        let all = vec![
+            "tool-darwin-arm64.tar.gz".to_string(),
+            "tool-linux-amd64.tar.gz".to_string(),
+        ];
+        let mut assets = HashMap::new();
+        assets.insert(
+            "macos-arm64".to_string(),
+            "tool-darwin-arm64.tar.gz".to_string(),
+        );
+        assert_eq!(detect_cosign_bundles(&all, &assets), None);
+    }
+
+    #[test]
+    fn extract_registry_namespace_https() {
+        assert_eq!(
+            extract_registry_namespace("https://gitlab.com/nomograph/kits.git"),
+            Some("nomograph".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_registry_namespace_ssh() {
+        assert_eq!(
+            extract_registry_namespace("git@gitlab.com:nomograph/kits.git"),
+            Some("nomograph".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_registry_namespace_github() {
+        assert_eq!(
+            extract_registry_namespace("https://github.com/someone/tools.git"),
+            Some("someone".to_string())
+        );
     }
 }

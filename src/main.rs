@@ -37,8 +37,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// One-time setup: create config, add first registry, initial sync
-    Setup,
+    /// One-time setup: create config, optionally add a registry
+    Setup {
+        /// Registry URL to add (e.g., https://gitlab.com/nomograph/kits.git)
+        #[arg(long)]
+        registry: Option<String>,
+        /// Name for the registry (defaults to inferring from URL)
+        #[arg(long)]
+        name: Option<String>,
+    },
 
     /// Pull registries, resolve versions, generate mise config, verify
     Sync {
@@ -57,14 +64,11 @@ enum Commands {
     Add {
         /// Tool name
         name: String,
-        /// Source (owner/repo for GitHub, --gitlab for GitLab, --npm for npm)
+        /// Source (owner/repo for GitHub/GitLab, package name for npm)
         source: Option<String>,
-        /// GitLab project (use with --gitlab)
+        /// GitLab project (source is the repo path, e.g. nomograph/muxr)
         #[arg(long)]
         gitlab: bool,
-        /// GitLab project ID (for own tools)
-        #[arg(long)]
-        project_id: Option<u64>,
         /// npm package
         #[arg(long)]
         npm: bool,
@@ -139,19 +143,32 @@ enum Commands {
         name: String,
     },
 
+    /// Check upstream for updates and apply interactively
+    Upgrade {
+        /// Apply all available updates without prompting
+        #[arg(long)]
+        yes: bool,
+        /// Only check a specific tool
+        tool: Option<String>,
+    },
+
     /// Generate shell completions
     #[command(hide = true)]
     Completions {
         /// Shell to generate for
         shell: clap_complete::Shell,
     },
+
+    /// Generate man page
+    #[command(hide = true)]
+    ManPage,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Setup => cmd_setup(),
+        Commands::Setup { registry, name } => cmd_setup(registry.as_deref(), name.as_deref()),
         Commands::Sync { yes } => cmd_sync(yes),
         Commands::Status => cmd_status(),
         Commands::Verify => cmd_verify(),
@@ -159,9 +176,8 @@ fn main() -> Result<()> {
             name,
             source,
             gitlab,
-            project_id,
             npm,
-        } => cmd_add(&name, source.as_deref(), gitlab, project_id, npm),
+        } => cmd_add(&name, source.as_deref(), gitlab, npm),
         Commands::Push { name } => cmd_push(&name),
         Commands::Remove { name } => cmd_remove(&name),
         Commands::Pin {
@@ -175,7 +191,9 @@ fn main() -> Result<()> {
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
         Commands::Apply { input } => cmd_apply(&input),
         Commands::Init { ci, name } => cmd_init(ci, &name),
+        Commands::Upgrade { yes, tool } => cmd_upgrade(yes, tool.as_deref()),
         Commands::Completions { shell } => cmd_completions(shell),
+        Commands::ManPage => cmd_man_page(),
     }
 }
 
@@ -185,7 +203,218 @@ fn cmd_completions(shell: clap_complete::Shell) -> Result<()> {
     Ok(())
 }
 
-fn cmd_setup() -> Result<()> {
+fn cmd_man_page() -> Result<()> {
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd);
+    man.render(&mut std::io::stdout())
+        .context("failed to render man page")?;
+    Ok(())
+}
+
+fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
+    let config = config::Config::load()?;
+
+    // Pull registries to ensure we have latest definitions
+    for reg in &config.registry {
+        match registry::ensure_registry(&config, reg) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("  warning: could not pull registry {}: {e}", reg.name);
+            }
+        }
+    }
+
+    let mut resolved = registry::resolve_tools(&config)?;
+    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+
+    // Filter to the specific tool if requested
+    if let Some(name) = tool_filter {
+        resolved.retain(|rt| rt.def.name == name);
+        if resolved.is_empty() {
+            anyhow::bail!("tool '{name}' not found in any registry");
+        }
+    }
+
+    eprintln!("kit upgrade: checking {} tools for updates\n", resolved.len());
+
+    struct UpgradeCandidate {
+        name: String,
+        current: String,
+        available: String,
+        bump: String,
+        registry_dir: PathBuf,
+    }
+
+    let mut candidates: Vec<UpgradeCandidate> = Vec::new();
+
+    for rt in &resolved {
+        eprint!("  {:<20} ", rt.def.name);
+
+        // Skip sources we can't auto-check
+        match rt.def.source {
+            tool::Source::Direct => {
+                eprintln!("{:<12} skip (direct source)", rt.def.version);
+                continue;
+            }
+            tool::Source::Rustup => {
+                eprintln!("{:<12} skip (rustup)", rt.def.version);
+                continue;
+            }
+            tool::Source::Npm => {
+                eprintln!("{:<12} skip (npm)", rt.def.version);
+                continue;
+            }
+            tool::Source::Crates => {
+                eprintln!("{:<12} skip (crates)", rt.def.version);
+                continue;
+            }
+            _ => {}
+        }
+
+        let upstream = match rt.def.source {
+            tool::Source::Github => {
+                let repo = match rt.def.repo.as_deref() {
+                    Some(r) => r,
+                    None => {
+                        eprintln!("{:<12} skip (no repo)", rt.def.version);
+                        continue;
+                    }
+                };
+                source::query_github(repo)
+            }
+            tool::Source::Gitlab => {
+                let repo = match rt.def.repo.as_deref() {
+                    Some(r) => r,
+                    None => {
+                        eprintln!("{:<12} skip (no repo)", rt.def.version);
+                        continue;
+                    }
+                };
+                source::query_gitlab(repo)
+            }
+            _ => unreachable!(),
+        };
+
+        match upstream {
+            Ok(info) => {
+                if info.version == rt.def.version {
+                    eprintln!("{:<12} up to date", rt.def.version);
+                } else {
+                    let bump = detect_bump(&rt.def.version, &info.version);
+                    eprintln!(
+                        "{:<12} -> {:<12} ({})",
+                        rt.def.version, info.version, bump
+                    );
+                    let registry_dir = config.registry_dir()?.join(&rt.registry);
+                    candidates.push(UpgradeCandidate {
+                        name: rt.def.name.clone(),
+                        current: rt.def.version.clone(),
+                        available: info.version,
+                        bump,
+                        registry_dir,
+                    });
+                }
+            }
+            Err(e) => {
+                eprintln!("{:<12} error ({e:#})", rt.def.version);
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        eprintln!("\nAll tools are up to date.");
+        return Ok(());
+    }
+
+    // Print summary table
+    eprintln!();
+    eprintln!(
+        "  {:<20} {:<12} {:<12} BUMP",
+        "TOOL", "CURRENT", "AVAILABLE"
+    );
+    for c in &candidates {
+        eprintln!(
+            "  {:<20} {:<12} {:<12} {}",
+            c.name, c.current, c.available, c.bump
+        );
+    }
+    eprintln!();
+
+    // Confirm or auto-apply
+    let proceed = if auto_yes {
+        true
+    } else {
+        eprint!("Apply {} update(s)? [y/N] ", candidates.len());
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap_or(0);
+        matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+    };
+
+    if !proceed {
+        eprintln!("Aborted.");
+        return Ok(());
+    }
+
+    // Apply updates to TOML files
+    for c in &candidates {
+        let tool_path = c.registry_dir.join("tools").join(format!("{}.toml", c.name));
+        if !tool_path.exists() {
+            eprintln!("  warning: {}.toml not found, skipping", c.name);
+            continue;
+        }
+
+        let raw = std::fs::read_to_string(&tool_path)
+            .with_context(|| format!("failed to read {}", tool_path.display()))?;
+
+        let mut doc = raw
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| format!("failed to parse {} as TOML", tool_path.display()))?;
+
+        if let Some(tool_table) = doc.get_mut("tool").and_then(|t| t.as_table_mut()) {
+            tool_table["version"] = toml_edit::value(c.available.as_str());
+        } else {
+            eprintln!("  warning: no [tool] table in {}.toml, skipping", c.name);
+            continue;
+        }
+
+        std::fs::write(&tool_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", tool_path.display()))?;
+
+        eprintln!("  updated {}: {} -> {}", c.name, c.current, c.available);
+    }
+
+    eprintln!("\nRun `kit sync` to install the updates.");
+    Ok(())
+}
+
+/// Compare semver components to determine the bump type.
+fn detect_bump(current: &str, available: &str) -> String {
+    let parse = |v: &str| -> (u64, u64, u64) {
+        let parts: Vec<&str> = v.split('.').collect();
+        let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+        // Strip any pre-release suffix from the patch component (e.g. "0-beta.1" -> 0)
+        let patch = parts
+            .get(2)
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0);
+        (major, minor, patch)
+    };
+
+    let (cm, cmi, _cp) = parse(current);
+    let (am, ami, _ap) = parse(available);
+
+    if am != cm {
+        "major".to_string()
+    } else if ami != cmi {
+        "minor".to_string()
+    } else {
+        "patch".to_string()
+    }
+}
+
+fn cmd_setup(registry_url: Option<&str>, registry_name: Option<&str>) -> Result<()> {
     let config_path = config::Config::path()?;
     if config_path.exists() {
         eprintln!("Config already exists at {}", config_path.display());
@@ -193,13 +422,34 @@ fn cmd_setup() -> Result<()> {
         return Ok(());
     }
 
-    let config = config::Config::default_with_registry(
-        "dunn",
-        "https://gitlab.com/nomograph/kits.git",
-    );
+    let config = if let Some(url) = registry_url {
+        // Infer registry name from URL if not provided
+        let name = registry_name.unwrap_or_else(|| {
+            url.trim_end_matches(".git")
+                .rsplit('/')
+                .next()
+                .unwrap_or("default")
+        });
+        config::Config::default_with_registry(name, url)
+    } else {
+        // No default registry -- user adds their own
+        config::Config {
+            settings: config::Settings::default(),
+            registry: vec![],
+            pins: std::collections::HashMap::new(),
+        }
+    };
     config.save()?;
     eprintln!("Created {}", config_path.display());
-    eprintln!("Run `kit sync` to pull tools and generate mise config.");
+    if registry_url.is_some() {
+        eprintln!("Run `kit sync` to pull tools and generate mise config.");
+    } else {
+        eprintln!("No registry configured. Add one to your config:");
+        eprintln!("  [[registry]]");
+        eprintln!("  name = \"my-registry\"");
+        eprintln!("  url = \"https://gitlab.com/your/registry.git\"");
+        eprintln!("\nOr run: kit setup --registry https://gitlab.com/your/registry.git");
+    }
     Ok(())
 }
 
@@ -451,13 +701,7 @@ fn cmd_verify() -> Result<()> {
     Ok(())
 }
 
-fn cmd_add(
-    name: &str,
-    source: Option<&str>,
-    gitlab: bool,
-    project_id: Option<u64>,
-    npm: bool,
-) -> Result<()> {
+fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool) -> Result<()> {
     tool::validate_name(name)?;
     let config = config::Config::load()?;
 
@@ -502,11 +746,17 @@ fn cmd_add(
             }
         }
         tool::Source::Gitlab => {
-            let repo_str = source.unwrap_or("");
-            eprint!("  querying GitLab... ");
-            match source::query_gitlab(repo_str, project_id) {
+            let repo_str = source.ok_or_else(|| {
+                anyhow::anyhow!("GitLab source requires owner/repo path argument")
+            })?;
+            eprint!("  querying GitLab {repo_str}... ");
+            match source::query_gitlab(repo_str) {
                 Ok(info) => {
-                    eprintln!("ok ({})", info.version);
+                    eprintln!(
+                        "ok ({}, project_id={})",
+                        info.version,
+                        info.project_id.unwrap_or(0)
+                    );
                     Some(info)
                 }
                 Err(e) => {
@@ -534,6 +784,27 @@ fn cmd_add(
         _ => None,
     };
 
+    // Detect aqua registry membership for GitHub tools.
+    let aqua = if source_type == tool::Source::Github {
+        eprint!("  detecting aqua registry... ");
+        match source::detect_aqua(name, source) {
+            Some(id) => {
+                eprintln!("found ({id})");
+                Some(id)
+            }
+            None => {
+                eprintln!("not found");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Determine tier: "own" if the tool's namespace matches the registry namespace.
+    let resolved_project_id = upstream.as_ref().and_then(|u| u.project_id);
+    let tier = detect_tier(gitlab, source, &reg.url, &registry_dir);
+
     // Build the tool definition, populated from upstream when available.
     let (version, tag_prefix, assets, checksum) = match &upstream {
         Some(info) => {
@@ -560,6 +831,31 @@ fn cmd_add(
         ),
     };
 
+    // Auto-detect cosign signature config from upstream.
+    let signature = upstream
+        .as_ref()
+        .and_then(|info| info.signature_method.as_ref())
+        .map(|method| match method.as_str() {
+            "cosign-keyless" if gitlab => {
+                let repo_path = source.unwrap_or("");
+                tool::SignatureConfig {
+                    method: tool::SignatureMethod::CosignKeyless,
+                    issuer: Some("https://gitlab.com".to_string()),
+                    identity: Some(format!("https://gitlab.com/{repo_path}")),
+                }
+            }
+            "cosign-keyless" => tool::SignatureConfig {
+                method: tool::SignatureMethod::CosignKeyless,
+                issuer: None,
+                identity: None,
+            },
+            _ => tool::SignatureConfig {
+                method: tool::SignatureMethod::None,
+                issuer: None,
+                identity: None,
+            },
+        });
+
     let file = tool::ToolFile {
         tool: tool::ToolDef {
             name: name.to_string(),
@@ -568,16 +864,16 @@ fn cmd_add(
             version,
             tag_prefix,
             bin: Some(name.to_string()),
-            tier: tool::Tier::Low,
+            tier,
             repo: repo.clone(),
-            project_id,
+            project_id: resolved_project_id,
             package: pkg,
             crate_name: None,
-            aqua: None,
+            aqua,
             assets,
             checksum,
             checksums: std::collections::HashMap::new(),
-            signature: None,
+            signature,
         },
     };
 
@@ -598,6 +894,9 @@ fn cmd_add(
         eprintln!("\n  Detected from upstream:");
         eprintln!("    version:     {}", info.version);
         eprintln!("    tag_prefix:  {:?}", info.tag_prefix);
+        if let Some(pid) = info.project_id {
+            eprintln!("    project_id:  {pid}");
+        }
         if let Some(a) = info.assets.get("macos-arm64") {
             eprintln!("    macos-arm64: {a}");
         }
@@ -607,18 +906,63 @@ fn cmd_add(
         if let Some(f) = &info.checksum_file {
             eprintln!("    checksum:    {f}");
         }
+        if let Some(m) = &info.signature_method {
+            eprintln!("    signature:   {m}");
+        }
         let missing: Vec<&str> = ["macos-arm64", "linux-x64"]
             .iter()
             .filter(|p| !info.assets.contains_key(**p))
             .copied()
             .collect();
         if !missing.is_empty() {
-            eprintln!("    warning: no assets detected for: {}", missing.join(", "));
+            eprintln!(
+                "    warning: no assets detected for: {}",
+                missing.join(", ")
+            );
         }
+    }
+    eprintln!("    tier:        {tier}");
+    if let Some(ref a) = file.tool.aqua {
+        eprintln!("    aqua:        {a}");
     }
 
     eprintln!("\nReview the definition, then run `kit push {name}`");
     Ok(())
+}
+
+/// Detect tier based on whether the tool's source namespace matches the registry namespace.
+fn detect_tier(
+    gitlab: bool,
+    source: Option<&str>,
+    registry_url: &str,
+    registry_dir: &std::path::Path,
+) -> tool::Tier {
+    // Try to get the namespace from _meta.toml, falling back to URL extraction.
+    let registry_ns = tool::load_registry_meta(registry_dir)
+        .ok()
+        .and_then(|meta| {
+            // Use the maintainer field if set, otherwise the registry name.
+            meta.registry.maintainer.or(Some(meta.registry.name))
+        });
+
+    // Fall back to extracting namespace from the registry URL.
+    let url_ns = source::extract_registry_namespace(registry_url);
+    let effective_ns = registry_ns.or(url_ns);
+
+    if let (Some(ns), Some(src)) = (effective_ns, source)
+        && let Some(src_ns) = src.split('/').next()
+        && src_ns == ns
+    {
+        return if gitlab {
+            // GitLab tools from the same org are "own" -- you control the release pipeline.
+            tool::Tier::Own
+        } else {
+            // GitHub tools from the same org are "high" trust.
+            tool::Tier::High
+        };
+    }
+
+    tool::Tier::Low
 }
 
 fn cmd_push(name: &str) -> Result<()> {
@@ -1083,3 +1427,32 @@ kit:apply:
     - sha256sum -c evaluated.json.sha256
     - kit apply --input evaluated.json
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_bump_major() {
+        assert_eq!(detect_bump("2.5.0", "3.0.6"), "major");
+        assert_eq!(detect_bump("1.0.0", "2.0.0"), "major");
+    }
+
+    #[test]
+    fn detect_bump_minor() {
+        assert_eq!(detect_bump("1.85.0", "1.86.0"), "minor");
+        assert_eq!(detect_bump("1.56.0", "1.91.0"), "minor");
+    }
+
+    #[test]
+    fn detect_bump_patch() {
+        assert_eq!(detect_bump("2.5.0", "2.5.1"), "patch");
+        assert_eq!(detect_bump("1.0.0", "1.0.3"), "patch");
+    }
+
+    #[test]
+    fn detect_bump_prerelease() {
+        assert_eq!(detect_bump("1.0.0-beta.1", "1.0.0"), "patch");
+        assert_eq!(detect_bump("1.0.0", "2.0.0-rc.1"), "major");
+    }
+}
