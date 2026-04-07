@@ -226,9 +226,9 @@ mod tests {
 
     #[test]
     fn default_config() {
-        let config = Config::default_with_registry("dunn", "https://gitlab.com/nomograph/kits.git");
+        let config = Config::default_with_registry("test", "https://gitlab.com/example/tools.git");
         assert_eq!(config.registry.len(), 1);
-        assert_eq!(config.registry[0].name, "dunn");
+        assert_eq!(config.registry[0].name, "test");
         assert!(!config.registry[0].readonly);
     }
 }
