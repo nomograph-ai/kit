@@ -64,7 +64,7 @@ enum Commands {
     Add {
         /// Tool name
         name: String,
-        /// Source (owner/repo for GitHub/GitLab, package name for npm)
+        /// Source (owner/repo for GitHub/GitLab, package name for npm/crates)
         source: Option<String>,
         /// GitLab project (source is the repo path, e.g. nomograph/muxr)
         #[arg(long)]
@@ -72,6 +72,9 @@ enum Commands {
         /// npm package
         #[arg(long)]
         npm: bool,
+        /// Crates.io package
+        #[arg(long)]
+        crates: bool,
     },
 
     /// Push a tool definition to its registry
@@ -143,6 +146,9 @@ enum Commands {
         name: String,
     },
 
+    /// Show changes between local lockfile and current registry
+    Diff,
+
     /// Check upstream for updates and apply interactively
     Upgrade {
         /// Apply all available updates without prompting
@@ -177,7 +183,9 @@ fn main() -> Result<()> {
             source,
             gitlab,
             npm,
-        } => cmd_add(&name, source.as_deref(), gitlab, npm),
+            crates,
+        } => cmd_add(&name, source.as_deref(), gitlab, npm, crates),
+
         Commands::Push { name } => cmd_push(&name),
         Commands::Remove { name } => cmd_remove(&name),
         Commands::Pin {
@@ -187,6 +195,7 @@ fn main() -> Result<()> {
         } => cmd_pin(&name, version.as_deref(), registry.as_deref()),
         Commands::Unpin { name } => cmd_unpin(&name),
         Commands::Audit => cmd_audit(),
+        Commands::Diff => cmd_diff(),
         Commands::Check { registry, output } => cmd_check(registry.as_deref(), &output),
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
         Commands::Apply { input } => cmd_apply(&input),
@@ -208,6 +217,118 @@ fn cmd_man_page() -> Result<()> {
     let man = clap_mangen::Man::new(cmd);
     man.render(&mut std::io::stdout())
         .context("failed to render man page")?;
+    Ok(())
+}
+
+fn cmd_diff() -> Result<()> {
+    let config = config::Config::load()?;
+
+    // Pull registries to get latest definitions
+    for reg in &config.registry {
+        match registry::ensure_registry(&config, reg) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("  warning: could not pull registry {}: {e}", reg.name);
+            }
+        }
+    }
+
+    // Resolve tools from registries
+    let mut resolved = registry::resolve_tools(&config)?;
+    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+
+    // Load lockfile
+    let lock = lockfile::Lockfile::load(&config)?;
+
+    if lock.entries.is_empty() {
+        eprintln!("No lockfile found. Run `kit sync` first.");
+        return Ok(());
+    }
+
+    // Build the new-resolved tuples for lockfile::diff
+    let new_resolved: Vec<(String, String, String)> = resolved
+        .iter()
+        .map(|rt| {
+            (
+                rt.def.name.clone(),
+                rt.def.version.clone(),
+                rt.registry.clone(),
+            )
+        })
+        .collect();
+
+    let changes = lockfile::diff(&lock, &new_resolved);
+
+    if changes.is_empty() {
+        eprintln!("kit diff: no changes ({} tools unchanged)", resolved.len());
+        return Ok(());
+    }
+
+    // Print table header
+    let mut changed_count = 0;
+    eprintln!();
+    eprintln!(
+        "  {:<20} {:<12} {:<12} CHANGE",
+        "TOOL", "LOCKFILE", "REGISTRY"
+    );
+    for change in &changes {
+        match change {
+            lockfile::Change::Updated {
+                name, from, to, ..
+            } => {
+                let bump = detect_bump(from, to);
+                eprintln!(
+                    "  {:<20} {:<12} {:<12} {} bump",
+                    name, from, to, bump
+                );
+                changed_count += 1;
+            }
+            lockfile::Change::Added { name } => {
+                // Find the version from resolved
+                let version = resolved
+                    .iter()
+                    .find(|rt| rt.def.name == *name)
+                    .map(|rt| rt.def.version.as_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "  {:<20} {:<12} {:<12} new",
+                    name, "--", version
+                );
+                changed_count += 1;
+            }
+            lockfile::Change::Removed { name } => {
+                let version = lock
+                    .get(name)
+                    .map(|e| e.version.as_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "  {:<20} {:<12} {:<12} removed",
+                    name, version, "--"
+                );
+                changed_count += 1;
+            }
+            lockfile::Change::RegistryMoved {
+                name, from, to, ..
+            } => {
+                let version = lock
+                    .get(name)
+                    .map(|e| e.version.as_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "  {:<20} {:<12} {:<12} registry: {} -> {}",
+                    name, version, version, from, to
+                );
+                changed_count += 1;
+            }
+        }
+    }
+
+    let unchanged = resolved.len().saturating_sub(changed_count);
+    if unchanged > 0 {
+        eprintln!("  ({} tools unchanged)", unchanged);
+    }
+    eprintln!();
+
     Ok(())
 }
 
@@ -450,6 +571,10 @@ fn cmd_setup(registry_url: Option<&str>, registry_name: Option<&str>) -> Result<
         eprintln!("  url = \"https://gitlab.com/your/registry.git\"");
         eprintln!("\nOr run: kit setup --registry https://gitlab.com/your/registry.git");
     }
+    eprintln!();
+    eprintln!("Tip: enable shell completions:");
+    eprintln!("  kit completions zsh > ~/.zfunc/_kit    # zsh");
+    eprintln!("  kit completions bash > /etc/bash_completion.d/kit  # bash");
     Ok(())
 }
 
@@ -655,20 +780,21 @@ fn cmd_status() -> Result<()> {
     let lock = lockfile::Lockfile::load(&config)?;
 
     println!(
-        "  {:<20} {:<12} {:<10} {:<10} {:<10}",
-        "TOOL", "VERSION", "STATUS", "REGISTRY", "TIER"
+        "  {:<20} {:<12} {:<10} {:<10} {:<10} {:<12}",
+        "TOOL", "VERSION", "STATUS", "REGISTRY", "TIER", "VERIFY"
     );
 
     for rt in &resolved {
-        let status = match lock.get(&rt.def.name) {
+        let (status, verify_method) = match lock.get(&rt.def.name) {
             Some(entry) => {
-                if entry.version == rt.def.version {
+                let s = if entry.version == rt.def.version {
                     "current"
                 } else {
                     "outdated"
-                }
+                };
+                (s, entry.verification_method.as_str())
             }
-            None => "new",
+            None => ("new", ""),
         };
 
         let pinned = if config.pins.contains_key(&rt.def.name) {
@@ -678,7 +804,7 @@ fn cmd_status() -> Result<()> {
         };
 
         println!(
-            "  {:<20} {:<12} {:<10} {:<10} {}{pinned}",
+            "  {:<20} {:<12} {:<10} {:<10} {:<10} {verify_method}{pinned}",
             rt.def.name, rt.def.version, status, rt.registry, rt.def.tier
         );
     }
@@ -748,7 +874,7 @@ fn cmd_verify() -> Result<()> {
     Ok(())
 }
 
-fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool) -> Result<()> {
+fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bool) -> Result<()> {
     tool::validate_name(name)?;
     let config = config::Config::load()?;
 
@@ -766,12 +892,14 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool) -> Result<
         anyhow::bail!("{name} already exists in registry {}", reg.name);
     }
 
-    let (source_type, repo, pkg) = if npm {
-        (tool::Source::Npm, None, source.map(|s| s.to_string()))
+    let (source_type, repo, pkg, crate_name) = if crates {
+        (tool::Source::Crates, None, None, source.map(|s| s.to_string()))
+    } else if npm {
+        (tool::Source::Npm, None, source.map(|s| s.to_string()), None)
     } else if gitlab {
-        (tool::Source::Gitlab, source.map(|s| s.to_string()), None)
+        (tool::Source::Gitlab, source.map(|s| s.to_string()), None, None)
     } else {
-        (tool::Source::Github, source.map(|s| s.to_string()), None)
+        (tool::Source::Github, source.map(|s| s.to_string()), None, None)
     };
 
     // Query upstream for version, assets, and checksum info.
@@ -817,6 +945,21 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool) -> Result<
             let pkg_name = source.unwrap_or(name);
             eprint!("  querying npm {pkg_name}... ");
             match source::query_npm(pkg_name) {
+                Ok(info) => {
+                    eprintln!("ok ({})", info.version);
+                    Some(info)
+                }
+                Err(e) => {
+                    eprintln!("failed ({e:#})");
+                    eprintln!("  falling back to skeleton definition");
+                    None
+                }
+            }
+        }
+        tool::Source::Crates => {
+            let crate_str = source.unwrap_or(name);
+            eprint!("  querying crates.io {crate_str}... ");
+            match source::query_crates(crate_str) {
                 Ok(info) => {
                     eprintln!("ok ({})", info.version);
                     Some(info)
@@ -915,7 +1058,7 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool) -> Result<
             repo: repo.clone(),
             project_id: resolved_project_id,
             package: pkg,
-            crate_name: None,
+            crate_name,
             aqua,
             assets,
             checksum,

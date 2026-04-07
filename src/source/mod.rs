@@ -246,6 +246,71 @@ pub fn query_npm(package: &str) -> Result<UpstreamInfo> {
     })
 }
 
+// -- Crates.io --
+
+/// Crates.io crate name: alphanumeric, hyphens, underscores.
+const CRATE_PATTERN: &str = r"^[a-zA-Z0-9_-]+$";
+
+static CRATE_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(CRATE_PATTERN).unwrap());
+
+/// Query the latest crates.io version for a crate.
+///
+/// Shells out to `cargo search {crate_name} --limit 1` and parses the
+/// version from the output format `crate_name = "version"`.
+/// Crates.io packages have no binary assets -- cargo handles installation.
+pub fn query_crates(crate_name: &str) -> Result<UpstreamInfo> {
+    if !CRATE_RE.is_match(crate_name) {
+        anyhow::bail!(
+            "invalid crate name '{crate_name}': must match {CRATE_PATTERN}"
+        );
+    }
+
+    let output = run_command("cargo", &["search", crate_name, "--limit", "1"])
+        .context("failed to query crates.io -- is `cargo` installed?")?;
+
+    // cargo search output: `crate_name = "version"    # description`
+    // Find the line that starts with the exact crate name.
+    let version = output
+        .lines()
+        .find(|line| {
+            line.split('=')
+                .next()
+                .map(|name| name.trim() == crate_name)
+                .unwrap_or(false)
+        })
+        .and_then(|line| {
+            // Extract version between quotes after '='
+            let after_eq = line.split('=').nth(1)?;
+            let start = after_eq.find('"')? + 1;
+            let rest = &after_eq[start..];
+            let end = rest.find('"')?;
+            Some(rest[..end].to_string())
+        })
+        .with_context(|| format!("crate '{crate_name}' not found on crates.io"))?;
+
+    if version.is_empty() {
+        anyhow::bail!("cargo search returned empty version for '{crate_name}'");
+    }
+
+    let version_re = regex::Regex::new(crate::tool::VERSION_PATTERN).unwrap();
+    if !version_re.is_match(&version) {
+        anyhow::bail!(
+            "cargo search returned invalid version '{version}' for '{crate_name}'"
+        );
+    }
+
+    Ok(UpstreamInfo {
+        version,
+        tag_prefix: "v".to_string(),
+        assets: HashMap::new(),
+        checksum_file: None,
+        checksum_format: None,
+        project_id: None,
+        signature_method: None,
+    })
+}
+
 // -- Internal helpers --
 
 /// Validate a repo string against the safe pattern.
@@ -709,5 +774,22 @@ mod tests {
             extract_registry_namespace("https://github.com/someone/tools.git"),
             Some("someone".to_string())
         );
+    }
+
+    #[test]
+    fn crate_pattern_accepts_valid() {
+        assert!(CRATE_RE.is_match("cargo-nextest"));
+        assert!(CRATE_RE.is_match("serde"));
+        assert!(CRATE_RE.is_match("tokio"));
+        assert!(CRATE_RE.is_match("my_crate"));
+    }
+
+    #[test]
+    fn crate_pattern_rejects_invalid() {
+        assert!(!CRATE_RE.is_match("Evil Crate"));
+        assert!(!CRATE_RE.is_match("../traversal"));
+        assert!(!CRATE_RE.is_match("; rm -rf /"));
+        assert!(!CRATE_RE.is_match(""));
+        assert!(!CRATE_RE.is_match("@scoped/crate"));
     }
 }
