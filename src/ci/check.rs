@@ -299,7 +299,13 @@ fn check_gitlab(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
 fn check_npm(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     let package = def.package.as_deref().unwrap_or(&def.name);
 
-    let output = run_cmd("npm", &["view", package, "version"], None)?;
+    let output = match run_cmd("npm", &["view", package, "version"], None) {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("  {}: {} (skip -- npm not available)", def.name, def.version);
+            return Ok(None);
+        }
+    };
     let latest = output.trim().to_string();
 
     if latest.is_empty() || latest == def.version {
@@ -320,7 +326,13 @@ fn check_npm(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
 fn check_crates(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     let crate_name = def.crate_name.as_deref().unwrap_or(&def.name);
 
-    let output = run_cmd("cargo", &["search", crate_name, "--limit", "1"], None)?;
+    let output = match run_cmd("cargo", &["search", crate_name, "--limit", "1"], None) {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("  {}: {} (skip -- cargo not available)", def.name, def.version);
+            return Ok(None);
+        }
+    };
 
     // Parse: crate_name = "version"
     let latest = output
