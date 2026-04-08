@@ -464,25 +464,44 @@ fn download_and_verify_url(
     eprintln!("    downloading {}: {asset_name}", platform.key());
 
     let client = https_client()?;
-    match client.get(url).send() {
-        Ok(resp) if resp.status().is_success() => {
-            let bytes = resp.bytes().context("failed to read response body")?;
-            std::fs::write(&asset_path, &bytes)
-                .with_context(|| format!("failed to write {}", asset_path.display()))?;
+    let download = |client: &reqwest::blocking::Client, url: &str, path: &std::path::Path| -> Result<Option<usize>> {
+        match client.get(url).send() {
+            Ok(resp) if resp.status().is_success() => {
+                let content_length = resp.content_length().map(|l| l as usize);
+                let bytes = resp.bytes().context("failed to read response body")?;
+                let actual_len = bytes.len();
+                std::fs::write(path, &bytes)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                // Verify download completeness
+                if let Some(expected) = content_length
+                    && actual_len != expected
+                {
+                    anyhow::bail!(
+                        "incomplete download: got {} bytes, expected {}",
+                        actual_len,
+                        expected
+                    );
+                }
+                Ok(Some(actual_len))
+            }
+            Ok(resp) => {
+                eprintln!(
+                    "    warning: download failed for {} (HTTP {})",
+                    platform.key(),
+                    resp.status()
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                eprintln!("    warning: download failed for {}: {e}", platform.key());
+                Ok(None)
+            }
         }
-        Ok(resp) => {
-            eprintln!(
-                "    warning: download failed for {} (HTTP {})",
-                platform.key(),
-                resp.status()
-            );
-            candidate
-                .checksums
-                .insert(platform.key().to_string(), None);
-            return Ok(());
-        }
-        Err(e) => {
-            eprintln!("    warning: download failed for {}: {e}", platform.key());
+    };
+
+    match download(&client, url, &asset_path)? {
+        Some(_) => {}
+        None => {
             candidate
                 .checksums
                 .insert(platform.key().to_string(), None);
@@ -520,15 +539,38 @@ fn download_and_verify_url(
                                     .verified
                                     .insert(platform.key().to_string(), Some(true));
                             } else {
+                                // Retry once -- mismatch may be a corrupt download
                                 eprintln!(
-                                    "    ERROR: {} checksum MISMATCH! expected={}, got={}",
-                                    platform.key(),
-                                    expected,
-                                    computed
+                                    "    {}: checksum mismatch, retrying download...",
+                                    platform.key()
                                 );
-                                candidate
-                                    .verified
-                                    .insert(platform.key().to_string(), Some(false));
+                                let retry_ok = if let Ok(Some(_)) = download(&client, url, &asset_path) {
+                                    let retry_hash = compute_sha256_file(&asset_path)?;
+                                    retry_hash == expected
+                                } else {
+                                    false
+                                };
+                                if retry_ok {
+                                    eprintln!("    {}: checksum VERIFIED (retry)", platform.key());
+                                    // Update computed hash to the correct one
+                                    candidate
+                                        .checksums
+                                        .insert(platform.key().to_string(), Some(expected.clone()));
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(true));
+                                } else {
+                                    let retry_hash = compute_sha256_file(&asset_path).unwrap_or_default();
+                                    eprintln!(
+                                        "    ERROR: {} checksum MISMATCH (confirmed)! expected={}, got={}",
+                                        platform.key(),
+                                        expected,
+                                        retry_hash
+                                    );
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(false));
+                                }
                             }
                         }
                         Ok(None) => {
