@@ -1,16 +1,21 @@
-//! CI pipeline commands: check, evaluate, apply.
+//! CI pipeline commands for the three-pipeline supply chain architecture.
 //!
-//! These implement the three-phase update pipeline that replaces
-//! the Python scripts (check.py, evaluate.py, validate.py).
+//! Pipeline 1 -- Sense: detect upstream changes (scheduled, read-only)
+//! Pipeline 2 -- Respond: LLM evaluation + MR creation (triggered by sense)
+//! Pipeline 3 -- Verify: independent validation on MR (triggered by MR)
+//!
+//! Legacy aliases: check -> sense, evaluate + apply -> respond.
 
 pub mod apply;
 pub mod check;
 pub mod evaluate;
+pub mod sense;
+pub mod verify_registry;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// An update candidate discovered by the check phase.
+/// An update candidate discovered by the check/sense phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateCandidate {
     pub name: String,
@@ -28,7 +33,7 @@ pub struct UpdateCandidate {
     pub note: Option<String>,
 }
 
-/// Output of the check phase.
+/// Output of the check phase (legacy format, still used by evaluate).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckOutput {
     pub updates: Vec<UpdateCandidate>,
@@ -47,6 +52,100 @@ pub struct Advisory {
     pub severity: String,
     pub summary: String,
 }
+
+// ---------------------------------------------------------------------------
+// Sense report types (Pipeline 1 output)
+// ---------------------------------------------------------------------------
+
+/// The version bump magnitude.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BumpLevel {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl std::fmt::Display for BumpLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Patch => f.write_str("patch"),
+            Self::Minor => f.write_str("minor"),
+            Self::Major => f.write_str("major"),
+        }
+    }
+}
+
+/// Risk level for a finding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Risk {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl std::fmt::Display for Risk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => f.write_str("low"),
+            Self::Medium => f.write_str("medium"),
+            Self::High => f.write_str("high"),
+            Self::Critical => f.write_str("critical"),
+        }
+    }
+}
+
+/// The type of finding detected during sense.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingType {
+    VersionBump,
+    AdvisoryFound,
+}
+
+/// A single classified finding from the sense phase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SenseFinding {
+    pub tool: String,
+    #[serde(rename = "type")]
+    pub finding_type: FindingType,
+    pub current: String,
+    pub available: String,
+    pub bump: BumpLevel,
+    pub checksums_verified: bool,
+    pub advisories: Vec<Advisory>,
+    pub risk: Risk,
+    /// Trust tier from tool definition.
+    pub tier: String,
+    /// Additional notes (e.g. checksum status details).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Raw checksums per platform for downstream use.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub checksums: HashMap<String, Option<String>>,
+    /// Raw verification status per platform for downstream use.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub verified: HashMap<String, Option<bool>>,
+    /// The release tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+}
+
+/// Output of the sense phase (Pipeline 1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SenseReport {
+    pub findings: Vec<SenseFinding>,
+    pub tools_checked: usize,
+    /// Infrastructure errors (things that should fail the pipeline).
+    #[serde(default)]
+    pub infrastructure_errors: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Evaluate / Respond types (Pipeline 2)
+// ---------------------------------------------------------------------------
 
 /// A single evaluated update with its disposition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +175,34 @@ pub struct EvaluateSummary {
     pub rejected: usize,
 }
 
+// ---------------------------------------------------------------------------
+// Verify-registry types (Pipeline 3)
+// ---------------------------------------------------------------------------
+
+/// Result of verifying a single tool in the registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolVerifyResult {
+    pub name: String,
+    pub valid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Whether checksums re-verified successfully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksums_verified: Option<bool>,
+}
+
+/// Output of the verify-registry command (Pipeline 3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyRegistryOutput {
+    pub tools_checked: usize,
+    pub valid: usize,
+    pub invalid: usize,
+    pub results: Vec<ToolVerifyResult>,
+}
+
 // Re-export the entry points.
 pub use apply::apply;
 pub use check::check;
 pub use evaluate::evaluate;
+pub use sense::sense;
+pub use verify_registry::verify_registry;

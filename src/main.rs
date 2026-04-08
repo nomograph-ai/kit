@@ -21,7 +21,11 @@ use std::path::PathBuf;
         Tools are defined in per-tool TOML files within registries. kit resolves versions\n\
         across multiple registries, generates mise configuration, verifies checksums and\n\
         signatures, and automates upstream update tracking.\n\n\
-        Example:\n  \
+        Supply chain CI (three-pipeline architecture):\n  \
+        kit sense                     # Pipeline 1: detect upstream changes\n  \
+        kit evaluate + kit apply      # Pipeline 2: LLM assessment + MR\n  \
+        kit verify-registry           # Pipeline 3: validate before merge\n\n\
+        User commands:\n  \
         kit setup                     # one-time: create config, add registry\n  \
         kit sync                      # pull registries, generate mise config, verify\n  \
         kit status                    # show installed vs registry, drift detection\n  \
@@ -133,6 +137,34 @@ enum Commands {
         input: PathBuf,
     },
 
+    /// Detect upstream changes (Pipeline 1: Sense)
+    ///
+    /// Scans all tools in a registry for upstream updates, downloads and verifies
+    /// checksums, queries advisory databases, and produces a classified report.
+    /// Always succeeds unless infrastructure is broken (network, auth).
+    Sense {
+        /// Registry directory to scan
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        /// Output file for the sense report
+        #[arg(long, default_value = "sense-report.json")]
+        output: PathBuf,
+    },
+
+    /// Validate all tool definitions in a registry (Pipeline 3: Verify)
+    ///
+    /// Loads every TOML file in tools/, validates fields and checksums,
+    /// and re-verifies checksums against upstream where possible.
+    /// Used in MR pipelines as the deterministic gate before merge.
+    VerifyRegistry {
+        /// Registry directory to validate
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        /// Output file for verification results
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
     /// Check installed tools for known security advisories
     Audit,
 
@@ -199,6 +231,10 @@ fn main() -> Result<()> {
         Commands::Check { registry, output } => cmd_check(registry.as_deref(), &output),
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
         Commands::Apply { input } => cmd_apply(&input),
+        Commands::Sense { registry, output } => cmd_sense(registry.as_deref(), &output),
+        Commands::VerifyRegistry { registry, output } => {
+            cmd_verify_registry(registry.as_deref(), output.as_deref())
+        }
         Commands::Init { ci, name } => cmd_init(ci, &name),
         Commands::Upgrade { yes, tool } => cmd_upgrade(yes, tool.as_deref()),
         Commands::Completions { shell } => cmd_completions(shell),
@@ -1482,6 +1518,23 @@ fn cmd_apply(input: &std::path::Path) -> Result<()> {
     ci::apply(input)
 }
 
+fn cmd_sense(registry: Option<&std::path::Path>, output: &std::path::Path) -> Result<()> {
+    let registry_dir = registry
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    ci::sense(&registry_dir, output)
+}
+
+fn cmd_verify_registry(
+    registry: Option<&std::path::Path>,
+    output: Option<&std::path::Path>,
+) -> Result<()> {
+    let registry_dir = registry
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    ci::verify_registry(&registry_dir, output)
+}
+
 fn cmd_init(ci: bool, name: &str) -> Result<()> {
     tool::validate_name(name)
         .context("invalid registry name (must be lowercase alphanumeric + hyphens)")?;
@@ -1503,7 +1556,7 @@ fn cmd_init(ci: bool, name: &str) -> Result<()> {
 
     std::fs::write(
         ".gitignore",
-        "updates.json\nupdates.json.sha256\nevaluated.json\nevaluated.json.sha256\n__pycache__/\n",
+        "updates.json\nupdates.json.sha256\nevaluated.json\nevaluated.json.sha256\nsense-report.json\nsense-report.json.sha256\n__pycache__/\n",
     )?;
 
     if ci {
@@ -1560,62 +1613,95 @@ fn resolve_installed_sha(
     def.checksums.get(platform.key()).cloned()
 }
 
-const CI_TEMPLATE: &str = r#"# kit registry CI automation
+const CI_TEMPLATE: &str = r#"# kit registry CI -- three-pipeline supply chain architecture
+#
+# Pipeline 1: Sense   (scheduled) -- detect upstream changes, produce report
+# Pipeline 2: Respond (scheduled) -- LLM assessment, open MR with audit trail
+# Pipeline 3: Verify  (MR)        -- independent validation, gate before merge
+
 stages:
-  - check
-  - evaluate
-  - apply
+  - sense
+  - respond
+  - verify
 
 variables:
   CLAUDE_MODEL: "claude-haiku-4-5-20251001"
 
-kit:check:
-  stage: check
+# ---------------------------------------------------------------------------
+# Pipeline 1: Sense (scheduled -- detect upstream changes)
+# ---------------------------------------------------------------------------
+# NEVER fails on version drift (that is what it is designed to detect).
+# ONLY fails on infrastructure issues (cannot reach upstream, auth failure).
+
+kit:sense:
+  stage: sense
   image: rust:1.93-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
   before_script:
-    - cargo install --locked kit || true
+    - cargo install --locked nomograph-kit || true
   script:
-    - kit check --registry . --output updates.json
-    - sha256sum updates.json > updates.json.sha256
+    - kit sense --registry . --output sense-report.json
+    - sha256sum sense-report.json > sense-report.json.sha256
   artifacts:
-    paths: [updates.json, updates.json.sha256]
+    paths: [sense-report.json, sense-report.json.sha256]
     expire_in: 1 day
 
+# ---------------------------------------------------------------------------
+# Pipeline 2: Respond (triggered after sense -- LLM assessment + MR)
+# ---------------------------------------------------------------------------
+# Reads the sense report, classifies each finding, opens an MR with the
+# full audit trail as the description.
+
 kit:evaluate:
-  stage: evaluate
+  stage: respond
   image: rust:1.93-bookworm
-  needs: [kit:check]
+  needs: [kit:sense]
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
   before_script:
-    - cargo install --locked kit || true
+    - cargo install --locked nomograph-kit || true
   script:
-    - sha256sum -c updates.json.sha256
-    - kit evaluate --input updates.json --output evaluated.json
+    - sha256sum -c sense-report.json.sha256
+    - kit evaluate --input sense-report.json --output evaluated.json
     - sha256sum evaluated.json > evaluated.json.sha256
   artifacts:
     paths: [evaluated.json, evaluated.json.sha256]
     expire_in: 1 day
 
 kit:apply:
-  stage: apply
+  stage: respond
   image: rust:1.93-bookworm
   needs: [kit:evaluate]
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
   before_script:
-    - cargo install --locked kit || true
+    - cargo install --locked nomograph-kit || true
     - apt-get update -qq && apt-get install -y -qq git > /dev/null
     - git config user.email "kit-bot@localhost"
     - git config user.name "kit"
   script:
     - sha256sum -c evaluated.json.sha256
     - kit apply --input evaluated.json
+
+# ---------------------------------------------------------------------------
+# Pipeline 3: Verify (triggered by MR -- independent validation)
+# ---------------------------------------------------------------------------
+# Validates all tool definitions, re-verifies checksums independently.
+# If all pass, MR is ready for merge.
+
+kit:verify:
+  stage: verify
+  image: rust:1.93-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - cargo install --locked nomograph-kit || true
+  script:
+    - kit verify-registry --registry .
 "#;
 
 #[cfg(test)]

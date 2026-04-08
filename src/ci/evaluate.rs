@@ -13,17 +13,29 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{CheckOutput, EvaluateOutput, EvaluateSummary, EvaluatedUpdate, UpdateCandidate};
+use super::{
+    CheckOutput, EvaluateOutput, EvaluateSummary, EvaluatedUpdate, SenseReport, UpdateCandidate,
+};
 
 /// Run the evaluate phase.
 ///
-/// Reads `input` (updates.json), classifies each update, optionally calls
-/// Haiku for edge cases, and writes `output` (evaluated.json).
+/// Reads `input` (updates.json or sense-report.json), classifies each update,
+/// optionally calls Haiku for edge cases, and writes `output` (evaluated.json).
+///
+/// Accepts both legacy CheckOutput format and new SenseReport format.
 pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
     let content = std::fs::read_to_string(input)
         .with_context(|| format!("failed to read {}", input.display()))?;
-    let data: CheckOutput =
-        serde_json::from_str(&content).context("failed to parse updates.json")?;
+
+    // Try sense-report.json format first, fall back to legacy updates.json
+    let (data, sense_context) = if let Ok(sense_report) = serde_json::from_str::<SenseReport>(&content) {
+        let check_output = sense_report_to_check_output(&sense_report);
+        (check_output, Some(sense_report.findings))
+    } else {
+        let check_output: CheckOutput =
+            serde_json::from_str(&content).context("failed to parse input as updates.json or sense-report.json")?;
+        (check_output, None)
+    };
 
     if data.updates.is_empty() {
         eprintln!("No updates to evaluate");
@@ -39,6 +51,9 @@ pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
         std::fs::write(output, &json)?;
         return Ok(());
     }
+
+    // Store sense context for richer MR descriptions
+    let _ = sense_context;
 
     eprintln!("kit evaluate: evaluating {} updates\n", data.updates.len());
 
@@ -354,6 +369,39 @@ fn call_haiku(api_key: &str, model: &str, prompt: &str) -> Result<Option<Vec<Hai
         serde_json::from_str(&cleaned).context("failed to parse Haiku JSON response")?;
 
     Ok(Some(decisions))
+}
+
+/// Convert a SenseReport into the legacy CheckOutput format for classification.
+fn sense_report_to_check_output(report: &SenseReport) -> CheckOutput {
+    let updates: Vec<UpdateCandidate> = report
+        .findings
+        .iter()
+        .filter(|f| f.current != f.available) // Only actual version bumps
+        .map(|f| UpdateCandidate {
+            name: f.tool.clone(),
+            current_version: f.current.clone(),
+            new_version: f.available.clone(),
+            tag: f.tag.clone(),
+            checksums: f.checksums.clone(),
+            verified: f.verified.clone(),
+            note: f.note.clone(),
+        })
+        .collect();
+
+    let advisories: HashMap<String, Vec<super::Advisory>> = report
+        .findings
+        .iter()
+        .filter(|f| !f.advisories.is_empty())
+        .map(|f| (f.tool.clone(), f.advisories.clone()))
+        .collect();
+
+    CheckOutput {
+        updates_found: updates.len(),
+        updates,
+        errors: report.infrastructure_errors.clone(),
+        advisories,
+        tools_checked: report.tools_checked,
+    }
 }
 
 /// Strip markdown code fences (```json ... ```) from a string.
