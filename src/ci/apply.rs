@@ -102,10 +102,11 @@ pub fn apply(input: &Path) -> Result<()> {
 
     // Create branch, commit, push, create MR
     let now = chrono::Utc::now();
-    let branch = format!("kit/update-{}", now.format("%Y%m%d-%H%M"));
+    let branch = format!("kit/update-{}", now.format("%Y%m%d-%H%M%S"));
     let today = now.format("%Y-%m-%d").to_string();
 
-    // Create and switch to the branch
+    // Create and switch to the branch (delete if it exists from a previous run)
+    let _ = run_git(&["branch", "-D", &branch]);
     run_git(&["checkout", "-b", &branch])?;
 
     // Stage all modified tool files
