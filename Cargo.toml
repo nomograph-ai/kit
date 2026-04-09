@@ -9,6 +9,7 @@ homepage = "https://gitlab.com/nomograph/kit"
 keywords = ["supply-chain", "tools", "mise", "registry", "verification"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
+exclude = ["*.png", "*.svg", "hero.*", "avatar.*"]
 license = "MIT"
 
 [[bin]]
