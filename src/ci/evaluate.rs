@@ -150,7 +150,9 @@ pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
     eprintln!("Rejected: {rejected}");
 
     if rejected > 0 {
-        anyhow::bail!("{rejected} updates rejected (possible supply chain compromise)");
+        eprintln!("\nWARNING: {rejected} updates rejected -- these will NOT be applied");
+        eprintln!("  Rejected updates are included in the MR description for audit.");
+        eprintln!("  Approved updates will still be applied.");
     }
 
     Ok(())
