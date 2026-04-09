@@ -1,8 +1,11 @@
+![hero](hero.svg)
+
 # kit
 
 [![crates.io](https://img.shields.io/crates/v/nomograph-kit)](https://crates.io/crates/nomograph-kit)
 [![pipeline](https://gitlab.com/nomograph/kit/badges/main/pipeline.svg)](https://gitlab.com/nomograph/kit/-/pipelines)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)](https://gitlab.com/nomograph/kit)
 
 Verified tool registry manager -- manages developer toolchains from
 git-based registries.
@@ -43,9 +46,11 @@ kit status
 | `kit remove <name>` | Remove a tool from a writable registry |
 | `kit pin <name> <version>` | Pin a tool's version locally |
 | `kit unpin <name>` | Remove a local pin |
+| `kit sense` | Detect upstream changes, classify updates (CI mode) |
 | `kit check` | Scan upstream for newer versions (CI mode) |
 | `kit evaluate` | LLM review for edge cases (CI mode) |
 | `kit apply` | Apply updates, create MR (CI mode) |
+| `kit verify-registry` | Validate all tool definitions before merge (CI mode) |
 | `kit init [--ci]` | Scaffold a new registry |
 | `kit completions <shell>` | Shell completions (bash/zsh/fish) |
 | `kit man-page` | Generate man page |
