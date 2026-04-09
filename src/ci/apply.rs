@@ -45,23 +45,25 @@ pub fn apply(input: &Path) -> Result<()> {
         .filter(|e| e.evaluation == "reject")
         .collect();
 
-    eprintln!("kit apply: {} approved updates", to_apply.len());
-    if !flagged.is_empty() {
-        eprintln!("  flagged for review: {}", flagged.len());
-    }
+    // Apply approved AND flagged updates -- the MR is the review surface.
+    // Only rejected items (actual supply chain risk) are excluded.
+    let all_to_apply: Vec<_> = to_apply.iter().chain(flagged.iter()).collect();
+
+    eprintln!("kit apply: {} updates to apply ({} approved, {} flagged for review)",
+        all_to_apply.len(), to_apply.len(), flagged.len());
     if !rejected.is_empty() {
-        eprintln!("  rejected: {}", rejected.len());
+        eprintln!("  rejected (excluded): {}", rejected.len());
     }
 
-    if to_apply.is_empty() && flagged.is_empty() {
-        eprintln!("Nothing to apply or flag");
+    if all_to_apply.is_empty() {
+        eprintln!("Nothing to apply");
         return Ok(());
     }
 
-    // Apply each approved update to its TOML file
+    // Apply each update to its TOML file
     let mut applied_names: Vec<String> = Vec::new();
 
-    for update in &to_apply {
+    for update in &all_to_apply {
         let name = &update.candidate.name;
         let old_version = &update.candidate.current_version;
         let new_version = &update.candidate.new_version;
