@@ -483,8 +483,10 @@ fn download_and_verify_url(
         match client.get(url).send() {
             Ok(resp) if resp.status().is_success() => {
                 let content_length = resp.content_length().map(|l| l as usize);
+                let status = resp.status();
                 let bytes = resp.bytes().context("failed to read response body")?;
                 let actual_len = bytes.len();
+                eprintln!("      HTTP {} | {actual_len} bytes | content-length: {:?}", status, content_length);
                 std::fs::write(path, &bytes)
                     .with_context(|| format!("failed to write {}", path.display()))?;
                 // Verify download completeness
