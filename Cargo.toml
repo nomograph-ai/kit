@@ -1,6 +1,6 @@
 [package]
 name = "nomograph-kit"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Verified tool registry manager -- manages developer toolchains from git-based registries"
 authors = ["Andrew Dunn <andunn@gitlab.com>"]
