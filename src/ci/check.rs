@@ -554,23 +554,37 @@ fn download_and_verify_url(
                                     .verified
                                     .insert(platform.key().to_string(), Some(true));
                             } else {
-                                // Retry once -- mismatch may be a corrupt download
+                                // Retry: re-download BOTH binary and checksum file
+                                // CDN edge caching can serve stale data for one but not the other
                                 eprintln!(
-                                    "    {}: checksum mismatch, retrying download...",
+                                    "    {}: checksum mismatch, retrying both downloads...",
                                     platform.key()
                                 );
                                 let retry_ok = if let Ok(Some(_)) = download(&client, url, &asset_path) {
                                     let retry_hash = compute_sha256_file(&asset_path)?;
-                                    retry_hash == expected
+                                    // Re-download checksum file too
+                                    let retry_expected = match client.get(&csum_url).send() {
+                                        Ok(r) if r.status().is_success() => {
+                                            let retry_body = r.text().unwrap_or_default();
+                                            verify::parse_checksum_file(&retry_body, asset_name, format)
+                                                .ok()
+                                                .flatten()
+                                        }
+                                        _ => None,
+                                    };
+                                    match retry_expected {
+                                        Some(ref re) => retry_hash == *re,
+                                        None => retry_hash == expected, // fall back to original checksum
+                                    }
                                 } else {
                                     false
                                 };
                                 if retry_ok {
                                     eprintln!("    {}: checksum VERIFIED (retry)", platform.key());
-                                    // Update computed hash to the correct one
+                                    let verified_hash = compute_sha256_file(&asset_path)?;
                                     candidate
                                         .checksums
-                                        .insert(platform.key().to_string(), Some(expected.clone()));
+                                        .insert(platform.key().to_string(), Some(verified_hash));
                                     candidate
                                         .verified
                                         .insert(platform.key().to_string(), Some(true));
