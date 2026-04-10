@@ -547,6 +547,22 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
 }
 
 /// Compare semver components to determine the bump type.
+/// Returns true if `to` is an older version than `from` by simple numeric comparison.
+fn is_version_downgrade(from: &str, to: &str) -> bool {
+    let parse = |v: &str| -> (u64, u64, u64) {
+        let parts: Vec<&str> = v.split('.').collect();
+        let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts
+            .get(2)
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0);
+        (major, minor, patch)
+    };
+    parse(to) < parse(from)
+}
+
 fn detect_bump(current: &str, available: &str) -> String {
     let parse = |v: &str| -> (u64, u64, u64) {
         let parts: Vec<&str> = v.split('.').collect();
@@ -576,8 +592,32 @@ fn detect_bump(current: &str, available: &str) -> String {
 fn cmd_setup(registry_url: Option<&str>, registry_name: Option<&str>) -> Result<()> {
     let config_path = config::Config::path()?;
     if config_path.exists() {
+        // If --registry was passed, add it to the existing config rather than erroring.
+        if let Some(url) = registry_url {
+            let mut config = config::Config::load()?;
+            let name = registry_name.unwrap_or_else(|| {
+                url.trim_end_matches(".git")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("default")
+            });
+            if config.registry(name).is_some() {
+                eprintln!("Registry '{name}' already configured.");
+                return Ok(());
+            }
+            config.registry.push(config::Registry {
+                name: name.to_string(),
+                url: url.to_string(),
+                branch: "main".to_string(),
+                readonly: false,
+            });
+            config.save()?;
+            eprintln!("Added registry '{name}' to {}", config_path.display());
+            eprintln!("Run `kit sync` to pull tools and generate mise config.");
+            return Ok(());
+        }
         eprintln!("Config already exists at {}", config_path.display());
-        eprintln!("Edit it directly or delete it to re-run setup.");
+        eprintln!("To add a registry: kit setup --registry <url>");
         return Ok(());
     }
 
@@ -717,6 +757,34 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         eprintln!("\n  Changes:");
         for change in &changes {
             eprintln!("    {change}");
+        }
+
+        // Warn explicitly on version downgrades (registry pins an older version
+        // than what the user already has installed).
+        let downgrades: Vec<(&str, &str, &str)> = changes
+            .iter()
+            .filter_map(|c| {
+                if let lockfile::Change::Updated { name, from, to } = c {
+                    if is_version_downgrade(from, to) {
+                        Some((name.as_str(), from.as_str(), to.as_str()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !downgrades.is_empty() {
+            eprintln!("\n  WARNING: the following tools would be downgraded:");
+            for (name, from, to) in &downgrades {
+                eprintln!("    {name}: {from} -> {to}  (downgrade)");
+            }
+            if !auto_yes {
+                eprintln!("  Use --yes to accept version downgrades.");
+                anyhow::bail!("version downgrades detected -- review and re-run with --yes");
+            }
         }
 
         // S-9: registry migration requires confirmation
