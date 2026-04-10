@@ -172,6 +172,11 @@ impl Config {
 fn validate_registry_url(url: &str) -> Result<()> {
     let url_lower = url.to_lowercase();
 
+    // Reject newlines/carriage returns in any URL -- they can split commands.
+    if url.contains('\n') || url.contains('\r') {
+        anyhow::bail!("URL contains newline characters: {url}");
+    }
+
     // Allow HTTPS
     if url_lower.starts_with("https://") {
         // Check for shell metacharacters in the URL

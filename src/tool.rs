@@ -175,6 +175,14 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a version string. Public for use by commands (e.g. pin).
+pub fn validate_version(version: &str) -> Result<()> {
+    if !VERSION_RE.is_match(version) {
+        anyhow::bail!("invalid version '{version}': must match {VERSION_PATTERN}");
+    }
+    Ok(())
+}
+
 /// Validate a branch name (F9). Public for config validation.
 pub fn validate_branch(branch: &str) -> Result<()> {
     if !BRANCH_RE.is_match(branch) {

@@ -529,6 +529,8 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
 
         if let Some(tool_table) = doc.get_mut("tool").and_then(|t| t.as_table_mut()) {
             tool_table["version"] = toml_edit::value(c.available.as_str());
+            // Remove stale checksums -- they belong to the old version.
+            tool_table.remove("checksums");
         } else {
             eprintln!("  warning: no [tool] table in {}.toml, skipping", c.name);
             continue;
@@ -1379,9 +1381,9 @@ fn audit_github(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
         .as_deref()
         .context("github source requires 'repo' field")?;
 
-    let version = &def.version;
+    let escaped_version = def.version.replace('.', "\\\\.");
     let jq_filter = format!(
-        r#"[.[] | select(.vulnerabilities[]?.vulnerable_version_range | test("{version}"))]"#
+        r#"[.[] | select(.vulnerabilities[]?.vulnerable_version_range | test("{escaped_version}"))]"#
     );
 
     let output = std::process::Command::new("gh")
@@ -1469,6 +1471,11 @@ fn audit_npm(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
 }
 
 fn cmd_pin(name: &str, version: Option<&str>, registry: Option<&str>) -> Result<()> {
+    if let Some(v) = version {
+        tool::validate_version(v)
+            .with_context(|| format!("invalid pin version for '{name}'"))?;
+    }
+
     let mut config = config::Config::load()?;
 
     let pin = config::Pin {
@@ -1601,7 +1608,7 @@ fn has_checksum(def: &tool::ToolDef) -> &'static str {
 /// Returns None if the binary isn't found (not installed or different layout).
 fn resolve_installed_sha(
     def: &tool::ToolDef,
-    platform: platform::Platform,
+    _platform: platform::Platform,
     _mise_installs: &std::path::Path,
 ) -> Option<String> {
     // Use `mise which` for authoritative binary resolution.
@@ -1609,8 +1616,9 @@ fn resolve_installed_sha(
         return verify::compute_sha256(&bin_path).ok();
     }
 
-    // Fall back to inline checksums from registry if binary not found.
-    def.checksums.get(platform.key()).cloned()
+    // Binary not found -- return None rather than falling back to registry
+    // checksums, which are expected values not actual installed hashes.
+    None
 }
 
 const CI_TEMPLATE: &str = r#"# kit registry CI -- three-pipeline supply chain architecture
