@@ -248,20 +248,37 @@ fn check_gitlab(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
                 None => continue,
             };
 
-            // Search release asset links
+            // Search release asset links -- match exact name first,
+            // then fall back to URL ending with the asset name.
+            // Must not match .bundle, .sha256, or .sbom variants.
             let links = release["assets"]["links"].as_array();
             let url = links.and_then(|ls| {
-                ls.iter().find_map(|link| {
-                    let name = link["name"].as_str().unwrap_or("");
-                    let link_url = link["direct_asset_url"]
-                        .as_str()
-                        .or_else(|| link["url"].as_str());
-                    if name == asset_name || link_url.is_some_and(|u| u.contains(&asset_name)) {
-                        link_url.map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
+                // Exact name match first
+                ls.iter()
+                    .find_map(|link| {
+                        let name = link["name"].as_str().unwrap_or("");
+                        let link_url = link["direct_asset_url"]
+                            .as_str()
+                            .or_else(|| link["url"].as_str());
+                        if name == asset_name {
+                            link_url.map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    // Fall back to URL ending with exact asset name
+                    .or_else(|| {
+                        ls.iter().find_map(|link| {
+                            let link_url = link["direct_asset_url"]
+                                .as_str()
+                                .or_else(|| link["url"].as_str());
+                            if link_url.is_some_and(|u| u.ends_with(&format!("/{asset_name}"))) {
+                                link_url.map(|s| s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                    })
             });
 
             match url {
