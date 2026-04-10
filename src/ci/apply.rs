@@ -120,7 +120,7 @@ pub fn apply(input: &Path) -> Result<()> {
     // Build commit message
     let mut commit_lines = vec![format!("kit: tool updates {today}")];
     commit_lines.push(String::new());
-    for update in &to_apply {
+    for update in &all_to_apply {
         if applied_names.contains(&update.candidate.name) {
             commit_lines.push(format!(
                 "- {}: {} -> {}",

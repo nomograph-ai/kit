@@ -374,16 +374,11 @@ pub fn verify_tool(
                 .context("cosign-keyless requires 'identity' in signature config")?;
 
             // Construct the bundle URL (same base as the binary, with .bundle suffix).
-            let asset_name = tool
-                .asset_for(platform)
-                .context("no asset for platform")?;
-            let bundle_asset = format!("{asset_name}.bundle");
+            // Append .bundle to the full URL rather than using replace(), which
+            // could corrupt the URL if the asset name appears in the path prefix.
             let bundle_url = tool
                 .url_for(platform)
-                .map(|u| {
-                    // Replace the asset filename with the bundle filename.
-                    u.replace(&asset_name, &bundle_asset)
-                })
+                .map(|u| format!("{u}.bundle"))
                 .context("cannot determine bundle URL")?;
 
             match verify_cosign(binary_path, &bundle_url, issuer, identity) {

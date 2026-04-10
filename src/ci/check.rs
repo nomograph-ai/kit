@@ -354,7 +354,7 @@ fn check_crates(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     // Parse: crate_name = "version"
     let latest = output
         .lines()
-        .find(|line| line.starts_with(crate_name))
+        .find(|line| line.split('=').next().map(|name| name.trim() == crate_name).unwrap_or(false))
         .and_then(|line| {
             let start = line.find('"')?;
             let end = line[start + 1..].find('"')?;
@@ -611,9 +611,9 @@ fn check_advisories(def: &ToolDef) -> Result<Vec<Advisory>> {
         _ => return Ok(vec![]),
     };
 
-    let version = &def.version;
+    let escaped_version = def.version.replace('.', "\\\\.");
     let jq_filter = format!(
-        r#"[.[] | select(.vulnerabilities[]?.vulnerable_version_range | test("{version}"))]"#
+        r#"[.[] | select(.vulnerabilities[]?.vulnerable_version_range | test("{escaped_version}"))]"#
     );
 
     let output = match run_cmd_opt(
