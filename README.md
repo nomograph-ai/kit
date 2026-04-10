@@ -16,7 +16,17 @@ cosign signatures, and automates upstream update tracking.
 
 ## Install
 
+If you don't have Rust yet, the quickest path is [mise](https://mise.jdx.dev):
+
 ```bash
+mise use --global rust
+cargo install nomograph-kit
+```
+
+Or use rustup:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install nomograph-kit
 ```
 
