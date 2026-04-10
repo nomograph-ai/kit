@@ -14,6 +14,10 @@ kit resolves tool versions across multiple registries, generates
 [mise](https://mise.jdx.dev) configuration, verifies checksums and
 cosign signatures, and automates upstream update tracking.
 
+## Bootstrap
+
+![bootstrap sequence](bootstrap.svg)
+
 ## Install
 
 If you don't have Rust yet, the quickest path is [mise](https://mise.jdx.dev):

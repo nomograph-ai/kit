@@ -1,0 +1,98 @@
+<svg viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg">
+
+  <rect x="0" y="0" width="1200" height="500" fill="#faf6ed" stroke="#2c2417" stroke-width="3"/>
+  <rect x="0" y="0" width="1200" height="36" fill="#2c2417"/>
+  <text x="16" y="24" font-family="'IBM Plex Mono', monospace" font-size="14" fill="#faf6ed" font-weight="bold">kit -- bootstrap sequence</text>
+  <text x="1184" y="24" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#c4b99a" text-anchor="end">first-time setup: install → configure → sync → use</text>
+
+  <!-- Vertical connector line through step circles -->
+  <line x1="64" y1="72" x2="64" y2="400" stroke="#c4b99a" stroke-width="1" stroke-dasharray="3,4"/>
+
+  <!-- ─── STEP 1 ─── -->
+  <circle cx="64" cy="72" r="14" fill="#2c2417"/>
+  <text x="64" y="77" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">1</text>
+  <text x="92" y="68" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#2c2417" font-weight="bold">Install Rust</text>
+  <text x="92" y="83" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#6b5d4f">if not already installed -- kit requires cargo to build</text>
+
+  <rect x="92" y="92" width="560" height="44" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <text x="108" y="109" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417">mise use --global rust</text>
+  <text x="108" y="127" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#c4b99a">or: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</text>
+
+  <!-- ─── STEP 2 ─── -->
+  <circle cx="64" cy="162" r="14" fill="#2c2417"/>
+  <text x="64" y="167" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">2</text>
+  <text x="92" y="158" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#2c2417" font-weight="bold">Install kit</text>
+  <text x="92" y="173" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#6b5d4f">builds and installs the kit binary (~30s)</text>
+
+  <rect x="92" y="181" width="560" height="28" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <text x="108" y="200" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417">cargo install nomograph-kit</text>
+
+  <!-- ─── STEP 3 ─── -->
+  <circle cx="64" cy="237" r="14" fill="#2c2417"/>
+  <text x="64" y="242" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">3</text>
+  <text x="92" y="233" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#2c2417" font-weight="bold">Configure a registry</text>
+  <text x="92" y="248" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#6b5d4f">creates ~/.config/kit/config.toml with the registry URL</text>
+
+  <rect x="92" y="256" width="560" height="28" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <text x="108" y="275" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417">kit setup --registry https://gitlab.com/nomograph/kits.git</text>
+
+  <!-- ─── STEP 4 ─── -->
+  <circle cx="64" cy="312" r="14" fill="#2c2417"/>
+  <text x="64" y="317" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">4</text>
+  <text x="92" y="308" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#2c2417" font-weight="bold">Sync</text>
+  <text x="92" y="323" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#6b5d4f">pulls registry, resolves versions, verifies checksums + signatures, writes mise config</text>
+
+  <rect x="92" y="331" width="560" height="28" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <text x="108" y="350" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417">kit sync</text>
+
+  <!-- ─── STEP 5 ─── -->
+  <circle cx="64" cy="387" r="14" fill="#2c2417"/>
+  <text x="64" y="392" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">5</text>
+  <text x="92" y="383" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#2c2417" font-weight="bold">Install tools</text>
+  <text x="92" y="398" font-family="'IBM Plex Mono', monospace" font-size="8" fill="#6b5d4f">downloads verified binaries, adds to PATH via mise shims</text>
+
+  <rect x="92" y="406" width="560" height="28" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <text x="108" y="425" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417">mise install</text>
+
+  <!-- ─── RIGHT PANEL: WHAT YOU GET ─── -->
+  <rect x="690" y="48" width="480" height="390" fill="none" stroke="#2c2417" stroke-width="1.5"/>
+  <rect x="690" y="48" width="480" height="24" fill="#2c2417"/>
+  <text x="930" y="64" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#faf6ed" text-anchor="middle" font-weight="bold">after kit sync + mise install</text>
+
+  <text x="710" y="92" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">verified toolchain on PATH:</text>
+  <text x="710" y="110" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">gh, glab, git-lfs, go, rust</text>
+  <text x="710" y="126" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">muxr, rune, synthesist</text>
+  <text x="710" y="142" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">golangci-lint, shellcheck, uv, yq</text>
+  <text x="710" y="158" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">glow, vhs, gum, jq, hugo ...</text>
+
+  <line x1="710" y1="172" x2="1150" y2="172" stroke="#c4b99a" stroke-width="0.8"/>
+
+  <text x="710" y="190" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">every binary verified:</text>
+  <text x="710" y="208" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">SHA256 checksum against registry data</text>
+  <text x="710" y="224" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">cosign keyless or GitHub attestation</text>
+  <text x="710" y="240" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">version pinned in kit.lock</text>
+  <text x="710" y="256" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">same-version checksum change = hard stop</text>
+
+  <line x1="710" y1="270" x2="1150" y2="270" stroke="#c4b99a" stroke-width="0.8"/>
+
+  <text x="710" y="288" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">staying current:</text>
+  <text x="710" y="306" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">kit upgrade    -- interactive update workflow</text>
+  <text x="710" y="322" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">kit status     -- show drift from registry</text>
+  <text x="710" y="338" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">kit verify     -- re-verify all installed binaries</text>
+  <text x="710" y="354" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">kit audit      -- check for known advisories</text>
+
+  <line x1="710" y1="370" x2="1150" y2="370" stroke="#c4b99a" stroke-width="0.8"/>
+  <text x="710" y="388" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#c4b99a">multi-registry: first-wins priority, local pins override</text>
+  <text x="710" y="404" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#c4b99a">kit pin gh 2.80.0  --  lock a specific version locally</text>
+
+  <!-- Footer -->
+  <line x1="40" y1="453" x2="1160" y2="453" stroke="#c4b99a" stroke-width="1"/>
+  <text x="600" y="472" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#6b5d4f" text-anchor="middle">one registry, 26+ tools, every binary checksummed and signature-verified from a git-based registry</text>
+  <text x="590" y="490" text-anchor="middle" fill="#2c2417" font-family="'IBM Plex Mono', monospace" font-size="9" font-weight="600">Built with GitLab</text>
+  <g transform="translate(634, 479) scale(0.045)">
+    <path d="M282.83,170.73l-.27-.69-26.14-68.22a6.81,6.81,0,0,0-2.69-3.24,7,7,0,0,0-8,.43,7,7,0,0,0-2.32,3.52l-17.65,54H154.29l-17.65-54A6.86,6.86,0,0,0,134.32,99a7,7,0,0,0-8-.43,6.87,6.87,0,0,0-2.69,3.24L97.44,170l-.26.69a48.54,48.54,0,0,0,16.1,56.1l.09.07.24.17,39.82,29.82,19.7,14.91,12,9.06a8.07,8.07,0,0,0,9.76,0l12-9.06,19.7-14.91,40.06-30,.1-.08A48.56,48.56,0,0,0,282.83,170.73Z" fill="#E24329"/>
+    <path d="M282.83,170.73l-.27-.69a88.3,88.3,0,0,0-35.15,15.8L190,229.25c19.55,14.79,36.57,27.64,36.57,27.64l40.06-30,.1-.08A48.56,48.56,0,0,0,282.83,170.73Z" fill="#FC6D26"/>
+    <path d="M153.43,256.89l19.7,14.91,12,9.06a8.07,8.07,0,0,0,9.76,0l12-9.06,19.7-14.91S209.55,244,190,229.25C170.45,244,153.43,256.89,153.43,256.89Z" fill="#FCA326"/>
+    <path d="M132.58,185.84A88.19,88.19,0,0,0,97.44,170l-.26.69a48.54,48.54,0,0,0,16.1,56.1l.09.07.24.17,39.82,29.82s17-12.85,36.57-27.64Z" fill="#FC6D26"/>
+  </g>
+</svg>
