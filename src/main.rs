@@ -174,14 +174,20 @@ enum Commands {
     /// Check installed tools for known security advisories
     Audit,
 
-    /// Initialize a new registry
+    /// Initialize kit in current directory (project-local) or create a registry
     Init {
-        /// Include CI automation template
+        /// Create a tool registry instead of a project config
         #[arg(long)]
+        registry: bool,
+        /// Include CI automation template (requires --registry)
+        #[arg(long, requires = "registry")]
         ci: bool,
-        /// Registry name
-        #[arg(long, default_value = "my-registry")]
+        /// Registry name (requires --registry)
+        #[arg(long, default_value = "my-registry", requires = "registry")]
         name: String,
+        /// Registry URL for kit.toml (project init)
+        #[arg(long)]
+        url: Option<String>,
     },
 
     /// Show changes between local lockfile and current registry
@@ -241,7 +247,13 @@ fn main() -> Result<()> {
         Commands::VerifyRegistry { registry, output } => {
             cmd_verify_registry(registry.as_deref(), output.as_deref())
         }
-        Commands::Init { ci, name } => cmd_init(ci, &name),
+        Commands::Init { registry, ci, name, url } => {
+            if registry {
+                cmd_init_registry(ci, &name)
+            } else {
+                cmd_init_project(url.as_deref())
+            }
+        }
         Commands::Upgrade { yes, tool } => cmd_upgrade(yes, tool.as_deref()),
         Commands::Completions { shell } => cmd_completions(shell),
         Commands::ManPage => cmd_man_page(),
@@ -263,11 +275,12 @@ fn cmd_man_page() -> Result<()> {
 }
 
 fn cmd_diff() -> Result<()> {
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
     // Pull registries to get latest definitions
     for reg in &config.registry {
-        match registry::ensure_registry(&config, reg) {
+        match registry::ensure_registry(config, reg) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("  warning: could not pull registry {}: {e}", reg.name);
@@ -276,11 +289,11 @@ fn cmd_diff() -> Result<()> {
     }
 
     // Resolve tools from registries
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
 
     // Load lockfile
-    let lock = lockfile::Lockfile::load(&config)?;
+    let lock = lockfile::Lockfile::load_from(&ctx.lockfile_path()?)?;
 
     if lock.entries.is_empty() {
         eprintln!("No lockfile found. Run `kit sync` first.");
@@ -375,11 +388,12 @@ fn cmd_diff() -> Result<()> {
 }
 
 fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
     // Pull registries to ensure we have latest definitions
     for reg in &config.registry {
-        match registry::ensure_registry(&config, reg) {
+        match registry::ensure_registry(config, reg) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("  warning: could not pull registry {}: {e}", reg.name);
@@ -387,8 +401,8 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
         }
     }
 
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
 
     // Filter to the specific tool if requested
     if let Some(name) = tool_filter {
@@ -663,15 +677,16 @@ fn cmd_setup(registry_url: Option<&str>, registry_name: Option<&str>) -> Result<
 }
 
 fn cmd_sync(auto_yes: bool) -> Result<()> {
-    let config = config::Config::load()?;
-    let platform = resolve_platform(&config)?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
+    let platform = resolve_platform(config)?;
 
-    eprintln!("kit sync ({})", platform);
+    eprintln!("kit sync ({}) [{}]", platform, ctx.mode_label());
 
     // 1. Pull all registries
     for reg in &config.registry {
         eprint!("  pulling {}... ", reg.name);
-        match registry::ensure_registry(&config, reg) {
+        match registry::ensure_registry(config, reg) {
             Ok(_) => eprintln!("ok"),
             Err(e) => {
                 eprintln!("FAILED: {e}");
@@ -681,8 +696,8 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     }
 
     // 2. Resolve tools across registries
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
     eprintln!("  resolved {} tools", resolved.len());
 
     // 3. Resolve expected checksums for ALL tools (inline + checksum files).
@@ -728,7 +743,8 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     }
 
     // 4. Load existing lockfile and check integrity
-    let old_lock = lockfile::Lockfile::load(&config)?;
+    let lockfile_path = ctx.lockfile_path()?;
+    let old_lock = lockfile::Lockfile::load_from(&lockfile_path)?;
 
     // S-2: ALWAYS check integrity, even when diff shows no version changes.
     // A compromised registry could change only the checksum (same version).
@@ -807,12 +823,59 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     }
 
     // 5. Generate mise config (S-3: uses toml crate, not string interpolation)
-    let mise_content = mise::generate(&resolved, &config)?;
-    let mise_path = config.mise_config_path()?;
+    let mise_path = ctx.mise_config_path()?;
     if let Some(parent) = mise_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&mise_path, &mise_content)?;
+
+    if ctx.is_project() {
+        // Project mode: merge into existing .mise.toml with markers
+        let existing = if mise_path.exists() {
+            Some(std::fs::read_to_string(&mise_path)?)
+        } else {
+            None
+        };
+        let registry_label = config
+            .registry
+            .first()
+            .map(|r| r.name.as_str())
+            .unwrap_or("kit");
+        let merge_result =
+            mise::merge_into(&resolved, existing.as_deref(), registry_label)?;
+
+        if !merge_result.conflicts.is_empty() {
+            eprintln!("\n  Conflicts (user tool vs kit):");
+            for c in &merge_result.conflicts {
+                eprintln!("    {}: user={}, kit={}", c.tool, c.user_version, c.kit_version);
+            }
+            if !auto_yes {
+                eprintln!("  Kit tools will be added alongside user tools.");
+                eprintln!("  Remove duplicates from your .mise.toml to resolve.");
+            }
+        }
+
+        std::fs::write(&mise_path, &merge_result.content)?;
+    } else {
+        // Global mode: write complete config to conf.d (additive)
+        let mise_content = mise::generate(&resolved, config)?;
+        std::fs::write(&mise_path, &mise_content)?;
+
+        // One-time migration: clean up old "Managed by kit" config.toml
+        let old_global = config
+            .mise_config_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from(""));
+        if old_global != mise_path && old_global.exists() {
+            if let Ok(content) = std::fs::read_to_string(&old_global) {
+                if content.starts_with("# Managed by kit") {
+                    let _ = std::fs::write(
+                        &old_global,
+                        "# Moved to conf.d/kit.toml by kit. Safe to delete this file.\n",
+                    );
+                    eprintln!("  migrated {} -> conf.d/", old_global.display());
+                }
+            }
+        }
+    }
     eprintln!("  wrote {}", mise_path.display());
 
     // 6. Run mise install
@@ -878,24 +941,28 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
             ),
         );
     }
-    new_lock.save(&config)?;
+    new_lock.save_to(&lockfile_path)?;
 
     eprintln!("\n  {} tools synced.", resolved.len());
     Ok(())
 }
 
 fn cmd_status() -> Result<()> {
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
-    let lock = lockfile::Lockfile::load(&config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
+    let lock = lockfile::Lockfile::load_from(&ctx.lockfile_path()?)?;
+
+    eprintln!("kit status [{}]\n", ctx.mode_label());
 
     println!(
         "  {:<20} {:<12} {:<10} {:<10} {:<10} {:<12}",
-        "TOOL", "VERSION", "STATUS", "REGISTRY", "TIER", "VERIFY"
+        "TOOL", "VERSION", "STATUS", "SOURCE", "TIER", "VERIFY"
     );
 
+    // Kit-managed tools
     for rt in &resolved {
         let (status, verify_method) = match lock.get(&rt.def.name) {
             Some(entry) => {
@@ -917,19 +984,38 @@ fn cmd_status() -> Result<()> {
 
         println!(
             "  {:<20} {:<12} {:<10} {:<10} {:<10} {verify_method}{pinned}",
-            rt.def.name, rt.def.version, status, rt.registry, rt.def.tier
+            rt.def.name, rt.def.version, status,
+            format!("kit({})", rt.registry), rt.def.tier
         );
+    }
+
+    // User-managed tools (from .mise.toml outside kit markers)
+    if ctx.is_project() {
+        let mise_path = ctx.mise_config_path()?;
+        if let Ok(user_tools) = mise::user_managed_tools(&mise_path) {
+            let kit_names: std::collections::HashSet<&str> =
+                resolved.iter().map(|rt| rt.def.name.as_str()).collect();
+            for (name, version) in &user_tools {
+                if !kit_names.contains(name.as_str()) {
+                    println!(
+                        "  {:<20} {:<12} {:<10} {:<10} {:<10}",
+                        name, version, "", "user", ""
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
 fn cmd_verify() -> Result<()> {
-    let config = config::Config::load()?;
-    let platform = resolve_platform(&config)?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
+    let platform = resolve_platform(config)?;
 
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
 
     let mut pass = 0u32;
     let mut fail = 0u32;
@@ -988,7 +1074,8 @@ fn cmd_verify() -> Result<()> {
 
 fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bool) -> Result<()> {
     tool::validate_name(name)?;
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
     let reg = config
         .registry
@@ -1269,7 +1356,8 @@ fn detect_tier(
 
 fn cmd_push(name: &str) -> Result<()> {
     tool::validate_name(name)?;
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
     let reg = config
         .registry
@@ -1325,7 +1413,8 @@ fn cmd_push(name: &str) -> Result<()> {
 
 fn cmd_remove(name: &str) -> Result<()> {
     tool::validate_name(name)?;
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
     let reg = config
         .registry
@@ -1379,10 +1468,11 @@ fn cmd_remove(name: &str) -> Result<()> {
 }
 
 fn cmd_audit() -> Result<()> {
-    let config = config::Config::load()?;
+    let ctx = config::ConfigContext::resolve()?;
+    let config = &ctx.config;
 
-    let mut resolved = registry::resolve_tools(&config)?;
-    registry::apply_pins(&mut resolved, &config.pins, &config)?;
+    let mut resolved = registry::resolve_tools(config)?;
+    registry::apply_pins(&mut resolved, &config.pins, config)?;
 
     eprintln!("kit audit: checking {} tools for security advisories\n", resolved.len());
 
@@ -1550,15 +1640,15 @@ fn cmd_pin(name: &str, version: Option<&str>, registry: Option<&str>) -> Result<
             .with_context(|| format!("invalid pin version for '{name}'"))?;
     }
 
-    let mut config = config::Config::load()?;
+    let mut ctx = config::ConfigContext::resolve()?;
 
     let pin = config::Pin {
         version: version.map(|s| s.to_string()),
         registry: registry.map(|s| s.to_string()),
     };
 
-    config.pins.insert(name.to_string(), pin);
-    config.save()?;
+    ctx.config.pins.insert(name.to_string(), pin);
+    ctx.save_config()?;
 
     match (version, registry) {
         (Some(v), Some(r)) => eprintln!("Pinned {name} to {v} from {r}"),
@@ -1572,10 +1662,10 @@ fn cmd_pin(name: &str, version: Option<&str>, registry: Option<&str>) -> Result<
 }
 
 fn cmd_unpin(name: &str) -> Result<()> {
-    let mut config = config::Config::load()?;
+    let mut ctx = config::ConfigContext::resolve()?;
 
-    if config.pins.remove(name).is_some() {
-        config.save()?;
+    if ctx.config.pins.remove(name).is_some() {
+        ctx.save_config()?;
         eprintln!("Unpinned {name}. Run `kit sync` to apply.");
     } else {
         eprintln!("{name} is not pinned.");
@@ -1616,7 +1706,52 @@ fn cmd_verify_registry(
     ci::verify_registry(&registry_dir, output)
 }
 
-fn cmd_init(ci: bool, name: &str) -> Result<()> {
+/// Initialize a project-local kit.toml in the current directory.
+/// Seeds registry entries from the global config if it exists.
+fn cmd_init_project(url: Option<&str>) -> Result<()> {
+    let kit_toml = std::path::Path::new("kit.toml");
+    if kit_toml.exists() {
+        anyhow::bail!("kit.toml already exists in this directory");
+    }
+
+    // Try to seed from global config
+    let registries = if let Some(url) = url {
+        let name = url
+            .trim_end_matches(".git")
+            .rsplit('/')
+            .next()
+            .unwrap_or("default");
+        format!(
+            "[[registry]]\nname = \"{name}\"\nurl = \"{url}\"\nbranch = \"main\"\nreadonly = true\n"
+        )
+    } else if let Ok(global) = config::Config::load() {
+        // Seed from global config
+        let mut sections = Vec::new();
+        for reg in &global.registry {
+            sections.push(format!(
+                "[[registry]]\nname = \"{}\"\nurl = \"{}\"\nbranch = \"{}\"\nreadonly = {}\n",
+                reg.name, reg.url, reg.branch, reg.readonly
+            ));
+        }
+        if sections.is_empty() {
+            "# Add a registry:\n# [[registry]]\n# name = \"my-registry\"\n# url = \"https://gitlab.com/your/registry.git\"\n# branch = \"main\"\n# readonly = true\n".to_string()
+        } else {
+            sections.join("\n")
+        }
+    } else {
+        "# Add a registry:\n# [[registry]]\n# name = \"my-registry\"\n# url = \"https://gitlab.com/your/registry.git\"\n# branch = \"main\"\n# readonly = true\n".to_string()
+    };
+
+    let content = format!(
+        "# Kit project configuration\n# https://gitlab.com/nomograph/kit\n\n{registries}\n[pins]\n"
+    );
+    std::fs::write(kit_toml, &content)?;
+    eprintln!("Created kit.toml");
+    eprintln!("Run `kit sync` to pull tools and generate .mise.toml");
+    Ok(())
+}
+
+fn cmd_init_registry(ci: bool, name: &str) -> Result<()> {
     tool::validate_name(name)
         .context("invalid registry name (must be lowercase alphanumeric + hyphens)")?;
     let tools_dir = std::path::Path::new("tools");

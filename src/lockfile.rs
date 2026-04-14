@@ -89,24 +89,23 @@ struct LockfileDoc {
 
 /// The kit lockfile -- records exact resolved state of all managed tools.
 ///
-/// Stored at `~/.config/kit/kit.lock`. This is the source of truth for
-/// what is installed and from where.
+/// In project mode: `.kit.lock` next to `kit.toml`.
+/// In global mode: `~/.config/kit/kit.lock`.
 #[derive(Debug, Clone)]
 pub struct Lockfile {
     pub entries: HashMap<String, LockEntry>,
 }
 
 impl Lockfile {
-    /// Load the lockfile from disk. Returns an empty lockfile if the
-    /// file does not exist yet (first run).
-    pub fn load(config: &Config) -> Result<Self> {
-        let path = Self::path(config)?;
+    /// Load the lockfile from a specific path.
+    /// Returns an empty lockfile if the file does not exist yet (first run).
+    pub fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 entries: HashMap::new(),
             });
         }
-        let content = std::fs::read_to_string(&path)
+        let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         let doc: LockfileDoc = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
@@ -115,9 +114,8 @@ impl Lockfile {
         })
     }
 
-    /// Write the lockfile atomically (write to .tmp, then rename).
-    pub fn save(&self, config: &Config) -> Result<()> {
-        let path = Self::path(config)?;
+    /// Write the lockfile atomically to a specific path.
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -142,11 +140,10 @@ impl Lockfile {
         Ok(())
     }
 
-    /// Resolved path to the lockfile.
-    pub fn path(config: &Config) -> Result<PathBuf> {
+    /// Resolved path to the global lockfile.
+    #[allow(dead_code)]
+    pub fn global_path() -> Result<PathBuf> {
         let config_dir = Config::config_dir()?;
-        // Ensure we use the same config dir that Config uses
-        let _ = config;
         Ok(config_dir.join("kit.lock"))
     }
 

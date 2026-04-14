@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Global kit configuration (~/.config/kit/config.toml).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,16 +81,11 @@ impl Config {
         let path = Self::path()?;
         if !path.exists() {
             anyhow::bail!(
-                "no config found at {}\nRun `kit setup` to create one.",
+                "no config found at {}\nRun `kit setup` or `kit init` to create one.",
                 path.display()
             );
         }
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        let config: Config = toml::from_str(&content)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
-        config.validate()?;
-        Ok(config)
+        Self::load_from(&path)
     }
 
     /// Config file path.
@@ -127,17 +122,10 @@ impl Config {
         self.registry.iter().find(|r| r.name == name)
     }
 
-    /// Save config to disk.
+    /// Save config to its default global path.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content =
-            toml::to_string_pretty(self).context("failed to serialize config")?;
-        std::fs::write(&path, content)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        Ok(())
+        self.save_to(&path)
     }
 
     /// Create a default config with a single registry.
@@ -209,6 +197,140 @@ fn validate_registry_url(url: &str) -> Result<()> {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Context-aware config resolution (project-local vs global)
+// ---------------------------------------------------------------------------
+
+/// Where the config was loaded from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigMode {
+    /// Project-local: kit.toml found in CWD or ancestor.
+    Project { root: PathBuf },
+    /// Global: ~/.config/kit/config.toml.
+    Global,
+}
+
+/// A loaded config together with its resolution context.
+///
+/// All user-facing commands should use `ConfigContext::resolve()` instead of
+/// `Config::load()` directly. This ensures project-local kit.toml files are
+/// discovered and respected.
+#[derive(Debug, Clone)]
+pub struct ConfigContext {
+    pub config: Config,
+    pub mode: ConfigMode,
+}
+
+impl ConfigContext {
+    /// Resolve config: walk up from CWD looking for `kit.toml`,
+    /// fall back to global `~/.config/kit/config.toml`.
+    pub fn resolve() -> Result<Self> {
+        Self::resolve_from(&std::env::current_dir().context("could not determine CWD")?)
+    }
+
+    /// Resolve config starting from a specific directory (testable).
+    pub fn resolve_from(start: &Path) -> Result<Self> {
+        // Walk up looking for kit.toml
+        let mut dir = start.to_path_buf();
+        loop {
+            let candidate = dir.join("kit.toml");
+            if candidate.is_file() {
+                let config = Config::load_from(&candidate)?;
+                return Ok(Self {
+                    config,
+                    mode: ConfigMode::Project { root: dir },
+                });
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+
+        // No kit.toml found -- fall back to global config
+        let config = Config::load()?;
+        Ok(Self {
+            config,
+            mode: ConfigMode::Global,
+        })
+    }
+
+    /// Path to the config file itself.
+    pub fn config_path(&self) -> Result<PathBuf> {
+        match &self.mode {
+            ConfigMode::Project { root } => Ok(root.join("kit.toml")),
+            ConfigMode::Global => Config::path(),
+        }
+    }
+
+    /// Path to the lockfile.
+    pub fn lockfile_path(&self) -> Result<PathBuf> {
+        match &self.mode {
+            ConfigMode::Project { root } => Ok(root.join(".kit.lock")),
+            ConfigMode::Global => {
+                let config_dir = Config::config_dir()?;
+                Ok(config_dir.join("kit.lock"))
+            }
+        }
+    }
+
+    /// Path to write mise config.
+    ///
+    /// Project mode: `.mise.toml` next to kit.toml (merge into existing).
+    /// Global mode: `~/.config/mise/conf.d/kit.toml` (additive).
+    pub fn mise_config_path(&self) -> Result<PathBuf> {
+        match &self.mode {
+            ConfigMode::Project { root } => Ok(root.join(".mise.toml")),
+            ConfigMode::Global => {
+                let home = dirs::home_dir().context("could not determine home directory")?;
+                Ok(home.join(".config").join("mise").join("conf.d").join("kit.toml"))
+            }
+        }
+    }
+
+    /// Whether this is project-local mode.
+    pub fn is_project(&self) -> bool {
+        matches!(self.mode, ConfigMode::Project { .. })
+    }
+
+    /// Save the config back to its source location.
+    pub fn save_config(&self) -> Result<()> {
+        let path = self.config_path()?;
+        self.config.save_to(&path)
+    }
+
+    /// Human-readable description of the active mode.
+    pub fn mode_label(&self) -> String {
+        match &self.mode {
+            ConfigMode::Project { root } => format!("project: {}", root.display()),
+            ConfigMode::Global => "global".to_string(),
+        }
+    }
+}
+
+impl Config {
+    /// Load config from a specific path (used by both global and project loading).
+    pub fn load_from(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let config: Config = toml::from_str(&content)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Save config to a specific path.
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content =
+            toml::to_string_pretty(self).context("failed to serialize config")?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +357,107 @@ mod tests {
         assert_eq!(config.registry.len(), 1);
         assert_eq!(config.registry[0].name, "test");
         assert!(!config.registry[0].readonly);
+    }
+
+    // -- ConfigContext resolution tests --
+
+    fn write_kit_toml(dir: &std::path::Path) {
+        let content = r#"
+[[registry]]
+name = "test"
+url = "https://gitlab.com/example/tools.git"
+branch = "main"
+"#;
+        std::fs::write(dir.join("kit.toml"), content).unwrap();
+    }
+
+    #[test]
+    fn resolve_finds_kit_toml_in_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_kit_toml(tmp.path());
+
+        let ctx = ConfigContext::resolve_from(tmp.path()).unwrap();
+        assert!(ctx.is_project());
+        assert_eq!(ctx.mode, ConfigMode::Project { root: tmp.path().to_path_buf() });
+        assert_eq!(ctx.config.registry.len(), 1);
+        assert_eq!(ctx.config.registry[0].name, "test");
+    }
+
+    #[test]
+    fn resolve_walks_up_to_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_kit_toml(tmp.path());
+
+        let child = tmp.path().join("src").join("lib");
+        std::fs::create_dir_all(&child).unwrap();
+
+        let ctx = ConfigContext::resolve_from(&child).unwrap();
+        assert!(ctx.is_project());
+        assert_eq!(ctx.mode, ConfigMode::Project { root: tmp.path().to_path_buf() });
+    }
+
+    #[test]
+    fn resolve_derived_paths_project_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_kit_toml(tmp.path());
+
+        let ctx = ConfigContext::resolve_from(tmp.path()).unwrap();
+
+        assert_eq!(ctx.config_path().unwrap(), tmp.path().join("kit.toml"));
+        assert_eq!(ctx.lockfile_path().unwrap(), tmp.path().join(".kit.lock"));
+        assert_eq!(ctx.mise_config_path().unwrap(), tmp.path().join(".mise.toml"));
+    }
+
+    #[test]
+    fn resolve_derived_paths_global_mode() {
+        // Use a temp dir with no kit.toml -- will try global fallback.
+        // If global config doesn't exist, that's OK for testing paths.
+        let tmp = tempfile::tempdir().unwrap();
+        let result = ConfigContext::resolve_from(tmp.path());
+
+        // This may fail if no global config exists -- that's fine,
+        // we test the Global variant directly.
+        if let Ok(ctx) = result {
+            assert!(!ctx.is_project());
+        }
+
+        // Test derived paths for a manually-constructed Global context.
+        let ctx = ConfigContext {
+            config: Config::default_with_registry("test", "https://example.com/r.git"),
+            mode: ConfigMode::Global,
+        };
+        let lock_path = ctx.lockfile_path().unwrap();
+        assert!(lock_path.ends_with("kit/kit.lock"), "got: {}", lock_path.display());
+
+        let mise_path = ctx.mise_config_path().unwrap();
+        assert!(mise_path.ends_with("mise/conf.d/kit.toml"), "got: {}", mise_path.display());
+    }
+
+    #[test]
+    fn config_load_from_and_save_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kit.toml");
+
+        let config = Config::default_with_registry("round-trip", "https://gitlab.com/example/tools.git");
+        config.save_to(&path).unwrap();
+
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.registry.len(), 1);
+        assert_eq!(loaded.registry[0].name, "round-trip");
+    }
+
+    #[test]
+    fn mode_label_formatting() {
+        let project_ctx = ConfigContext {
+            config: Config::default_with_registry("t", "https://example.com/r.git"),
+            mode: ConfigMode::Project { root: PathBuf::from("/home/user/myproject") },
+        };
+        assert_eq!(project_ctx.mode_label(), "project: /home/user/myproject");
+
+        let global_ctx = ConfigContext {
+            config: Config::default_with_registry("t", "https://example.com/r.git"),
+            mode: ConfigMode::Global,
+        };
+        assert_eq!(global_ctx.mode_label(), "global");
     }
 }
