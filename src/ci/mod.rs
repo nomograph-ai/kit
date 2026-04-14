@@ -200,6 +200,49 @@ pub struct VerifyRegistryOutput {
     pub results: Vec<ToolVerifyResult>,
 }
 
+// ---------------------------------------------------------------------------
+// Apply output types (kit apply → apply-result.json → CI shell)
+// ---------------------------------------------------------------------------
+
+/// Output of the apply phase — the contract between kit and CI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyOutput {
+    /// Updates that were applied to TOML files on disk.
+    pub applied: Vec<AppliedUpdate>,
+    /// Names of rejected updates (not applied).
+    pub rejected_names: Vec<String>,
+    /// Names of flagged updates (applied but need human review).
+    pub flagged_names: Vec<String>,
+    /// Suggested git branch name.
+    pub branch_hint: String,
+    /// Pre-built commit message.
+    pub commit_message: String,
+    /// MR title.
+    pub mr_title: String,
+    /// MR description body (markdown).
+    pub mr_body: String,
+    /// Whether all applied updates qualify for auto-merge per registry policy.
+    pub auto_merge_eligible: bool,
+}
+
+/// A single update that was applied to a tool TOML file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppliedUpdate {
+    pub name: String,
+    pub old_version: String,
+    pub new_version: String,
+    /// Relative path to the modified file (e.g. "tools/gh.toml").
+    pub file: String,
+    /// Evaluation disposition: "auto-approved", "approve", or "flag".
+    pub evaluation: String,
+    /// Version bump level: "patch", "minor", or "major".
+    pub bump: String,
+    /// Tool trust tier from TOML definition.
+    pub tier: String,
+    /// Whether checksums were verified for all platforms.
+    pub checksums_verified: bool,
+}
+
 // Re-export the entry points.
 pub use apply::apply;
 pub use check::check;

@@ -130,11 +130,17 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Apply evaluated updates to registry, create MR (CI mode)
+    /// Apply evaluated updates to registry TOML files (CI mode)
+    ///
+    /// Writes updated tool definitions and outputs apply-result.json
+    /// for CI to consume. Does not create git branches or MRs.
     Apply {
         /// Input file from evaluate phase
         #[arg(long, default_value = "evaluated.json")]
         input: PathBuf,
+        /// Output file for apply results (JSON contract for CI)
+        #[arg(long, default_value = "apply-result.json")]
+        output: PathBuf,
     },
 
     /// Detect upstream changes (Pipeline 1: Sense)
@@ -230,7 +236,7 @@ fn main() -> Result<()> {
         Commands::Diff => cmd_diff(),
         Commands::Check { registry, output } => cmd_check(registry.as_deref(), &output),
         Commands::Evaluate { input, output } => cmd_evaluate(&input, &output),
-        Commands::Apply { input } => cmd_apply(&input),
+        Commands::Apply { input, output } => cmd_apply(&input, &output),
         Commands::Sense { registry, output } => cmd_sense(registry.as_deref(), &output),
         Commands::VerifyRegistry { registry, output } => {
             cmd_verify_registry(registry.as_deref(), output.as_deref())
@@ -1589,8 +1595,8 @@ fn cmd_evaluate(input: &std::path::Path, output: &std::path::Path) -> Result<()>
     ci::evaluate(input, output)
 }
 
-fn cmd_apply(input: &std::path::Path) -> Result<()> {
-    ci::apply(input)
+fn cmd_apply(input: &std::path::Path, output: &std::path::Path) -> Result<()> {
+    ci::apply(input, output)
 }
 
 fn cmd_sense(registry: Option<&std::path::Path>, output: &std::path::Path) -> Result<()> {
@@ -1692,8 +1698,10 @@ fn resolve_installed_sha(
 const CI_TEMPLATE: &str = r#"# kit registry CI -- three-pipeline supply chain architecture
 #
 # Pipeline 1: Sense   (scheduled) -- detect upstream changes, produce report
-# Pipeline 2: Respond (scheduled) -- LLM assessment, open MR with audit trail
+# Pipeline 2: Respond (scheduled) -- LLM evaluation, apply updates, open MR
 # Pipeline 3: Verify  (MR)        -- independent validation, gate before merge
+#
+# kit CLI is pure: it writes files and JSON. CI owns all git/MR lifecycle.
 
 stages:
   - sense
@@ -1706,8 +1714,6 @@ variables:
 # ---------------------------------------------------------------------------
 # Pipeline 1: Sense (scheduled -- detect upstream changes)
 # ---------------------------------------------------------------------------
-# NEVER fails on version drift (that is what it is designed to detect).
-# ONLY fails on infrastructure issues (cannot reach upstream, auth failure).
 
 kit:sense:
   stage: sense
@@ -1725,12 +1731,10 @@ kit:sense:
     expire_in: 1 day
 
 # ---------------------------------------------------------------------------
-# Pipeline 2: Respond (triggered after sense -- LLM assessment + MR)
+# Pipeline 2: Respond (after sense -- evaluate, apply, create MR)
 # ---------------------------------------------------------------------------
-# Reads the sense report, classifies each finding, opens an MR with the
-# full audit trail as the description.
 
-kit:evaluate:
+kit:respond:
   stage: respond
   image: rust:1.93-bookworm
   needs: [kit:sense]
@@ -1739,35 +1743,52 @@ kit:evaluate:
     - if: $CI_PIPELINE_SOURCE == "web"
   before_script:
     - cargo install --locked nomograph-kit || true
-  script:
-    - sha256sum -c sense-report.json.sha256
-    - kit evaluate --input sense-report.json --output evaluated.json
-    - sha256sum evaluated.json > evaluated.json.sha256
-  artifacts:
-    paths: [evaluated.json, evaluated.json.sha256]
-    expire_in: 1 day
-
-kit:apply:
-  stage: respond
-  image: rust:1.93-bookworm
-  needs: [kit:evaluate]
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-  before_script:
-    - cargo install --locked nomograph-kit || true
-    - apt-get update -qq && apt-get install -y -qq git > /dev/null
+    - apt-get update -qq && apt-get install -y -qq git jq > /dev/null
     - git config user.email "kit-bot@localhost"
     - git config user.name "kit"
   script:
-    - sha256sum -c evaluated.json.sha256
-    - kit apply --input evaluated.json
+    # --- kit CLI (pure data transforms) ---
+    - sha256sum -c sense-report.json.sha256
+    - kit evaluate --input sense-report.json --output evaluated.json
+    - kit apply --input evaluated.json --output apply-result.json
+    # --- CI orchestration (git/MR lifecycle) ---
+    - |
+      APPLIED=$(jq '.applied | length' apply-result.json)
+      if [ "$APPLIED" -eq 0 ]; then
+        echo "No updates to apply"
+        exit 0
+      fi
+    # Close stale kit/* MRs
+    - |
+      STALE=$(glab mr list --source-branch "kit/" -F json 2>/dev/null \
+        | jq -r '.[].iid' || true)
+      for iid in $STALE; do
+        echo "Closing stale MR !${iid}"
+        glab mr close "$iid" || true
+      done
+    # Branch, commit, push
+    - BRANCH=$(jq -r '.branch_hint' apply-result.json)
+    - git checkout -b "$BRANCH"
+    - git add tools/*.toml
+    - jq -r '.commit_message' apply-result.json | git commit -F -
+    - git push -u origin "$BRANCH"
+    # Create MR
+    - |
+      MR_TITLE=$(jq -r '.mr_title' apply-result.json)
+      MR_BODY=$(jq -r '.mr_body' apply-result.json)
+      AUTO=$(jq -r '.auto_merge_eligible' apply-result.json)
+      glab mr create --title "$MR_TITLE" --description "$MR_BODY" \
+        --source-branch "$BRANCH" --remove-source-branch --yes
+      if [ "$AUTO" = "true" ]; then
+        MR_IID=$(glab mr list --source-branch "$BRANCH" -F json | jq -r '.[0].iid')
+        echo "Enabling auto-merge on MR !${MR_IID}"
+        glab mr merge "$MR_IID" --auto --remove-source-branch || \
+          echo "warning: auto-merge failed, MR needs manual merge"
+      fi
 
 # ---------------------------------------------------------------------------
 # Pipeline 3: Verify (triggered by MR -- independent validation)
 # ---------------------------------------------------------------------------
-# Validates all tool definitions, re-verifies checksums independently.
-# If all pass, MR is ready for merge.
 
 kit:verify:
   stage: verify

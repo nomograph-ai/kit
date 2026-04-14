@@ -4,29 +4,34 @@
 //! 1. Load the tool's TOML file from tools/<name>.toml
 //! 2. Update version and inline checksums using toml_edit (preserve formatting)
 //! 3. Write the file back
-//! 4. Git add, commit, push to a new branch
-//! 5. Create MR via glab CLI
+//! 4. Output apply-result.json for CI to consume
+//!
+//! This module is pure: it modifies files on disk and writes JSON.
+//! It does NOT create git branches, commits, MRs, or call any external APIs.
+//! The CI pipeline component owns all git/MR lifecycle.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use super::EvaluateOutput;
+use super::sense::classify_bump;
+use super::{AppliedUpdate, ApplyOutput, EvaluateOutput};
+use crate::tool::{self, Tier, ToolDef};
 
 /// Run the apply phase.
 ///
 /// Reads `input` (evaluated.json), applies approved updates to the
-/// tool TOML files in the current working directory, then creates
-/// a branch and MR.
-pub fn apply(input: &Path) -> Result<()> {
+/// tool TOML files in the current working directory, then writes
+/// `output` (apply-result.json) with everything CI needs to create
+/// the branch, MR, and optionally auto-merge.
+pub fn apply(input: &Path, output: &Path) -> Result<()> {
     let content = std::fs::read_to_string(input)
         .with_context(|| format!("failed to read {}", input.display()))?;
     let data: EvaluateOutput =
         serde_json::from_str(&content).context("failed to parse evaluated.json")?;
 
-    // Filter to approved updates
+    // Partition by evaluation
     let to_apply: Vec<_> = data
         .evaluated
         .iter()
@@ -49,19 +54,45 @@ pub fn apply(input: &Path) -> Result<()> {
     // Only rejected items (actual supply chain risk) are excluded.
     let all_to_apply: Vec<_> = to_apply.iter().chain(flagged.iter()).collect();
 
-    eprintln!("kit apply: {} updates to apply ({} approved, {} flagged for review)",
-        all_to_apply.len(), to_apply.len(), flagged.len());
+    eprintln!(
+        "kit apply: {} updates to apply ({} approved, {} flagged for review)",
+        all_to_apply.len(),
+        to_apply.len(),
+        flagged.len()
+    );
     if !rejected.is_empty() {
         eprintln!("  rejected (excluded): {}", rejected.len());
     }
 
     if all_to_apply.is_empty() {
         eprintln!("Nothing to apply");
+        let result = ApplyOutput {
+            applied: vec![],
+            rejected_names: rejected.iter().map(|r| r.candidate.name.clone()).collect(),
+            flagged_names: vec![],
+            branch_hint: String::new(),
+            commit_message: String::new(),
+            mr_title: String::new(),
+            mr_body: String::new(),
+            auto_merge_eligible: false,
+        };
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output, &json)
+            .with_context(|| format!("failed to write {}", output.display()))?;
         return Ok(());
     }
 
+    // Load registry policy for auto-merge decisions
+    let policy = match tool::load_registry_meta(Path::new(".")) {
+        Ok(meta) => meta.policy,
+        Err(e) => {
+            eprintln!("  warning: could not load _meta.toml policy ({e}), auto-merge disabled");
+            tool::RegistryPolicy::default()
+        }
+    };
+
     // Apply each update to its TOML file
-    let mut applied_names: Vec<String> = Vec::new();
+    let mut applied: Vec<AppliedUpdate> = Vec::new();
 
     for update in &all_to_apply {
         let name = &update.candidate.name;
@@ -75,6 +106,12 @@ pub fn apply(input: &Path) -> Result<()> {
         }
 
         eprintln!("  applying {name}: {old_version} -> {new_version}");
+
+        // Load tool definition to get tier
+        let tier = match ToolDef::load(&tool_path) {
+            Ok(def) => def.tier,
+            Err(_) => Tier::Low, // default if we can't parse
+        };
 
         // Use toml_edit for surgical updates that preserve formatting
         let raw = std::fs::read_to_string(&tool_path)
@@ -94,63 +131,124 @@ pub fn apply(input: &Path) -> Result<()> {
             }
         }
 
-        applied_names.push(name.clone());
+        let bump = classify_bump(old_version, new_version);
+        let checksums_verified = update
+            .candidate
+            .verified
+            .values()
+            .all(|v| *v == Some(true))
+            && !update.candidate.verified.is_empty();
+
+        applied.push(AppliedUpdate {
+            name: name.clone(),
+            old_version: old_version.clone(),
+            new_version: new_version.clone(),
+            file: format!("tools/{name}.toml"),
+            evaluation: update.evaluation.clone(),
+            bump: bump.to_string(),
+            tier: tier.to_string(),
+            checksums_verified,
+        });
     }
 
-    if applied_names.is_empty() {
+    if applied.is_empty() {
         eprintln!("No files were modified");
+        let result = ApplyOutput {
+            applied: vec![],
+            rejected_names: rejected.iter().map(|r| r.candidate.name.clone()).collect(),
+            flagged_names: flagged.iter().map(|f| f.candidate.name.clone()).collect(),
+            branch_hint: String::new(),
+            commit_message: String::new(),
+            mr_title: String::new(),
+            mr_body: String::new(),
+            auto_merge_eligible: false,
+        };
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output, &json)
+            .with_context(|| format!("failed to write {}", output.display()))?;
         return Ok(());
     }
 
-    // Create branch, commit, push, create MR
+    // Compute auto-merge eligibility
+    let auto_merge_eligible = applied.iter().all(|u| {
+        let tier = match u.tier.as_str() {
+            "own" => Tier::Own,
+            "high" => Tier::High,
+            _ => Tier::Low,
+        };
+        u.evaluation != "flag"
+            && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+    });
+
+    // Build branch hint, commit message, MR title/body
     let now = chrono::Utc::now();
-    let branch = format!("kit/update-{}", now.format("%Y%m%d-%H%M%S"));
+    let branch_hint = format!("kit/update-{}", now.format("%Y%m%d-%H%M%S"));
     let today = now.format("%Y-%m-%d").to_string();
+    let mr_title = format!("kit: tool updates {today}");
 
-    // Create and switch to the branch (delete if it exists from a previous run)
-    let _ = run_git(&["branch", "-D", &branch]);
-    run_git(&["checkout", "-b", &branch])?;
+    let commit_message = build_commit_message(&today, &applied);
+    let mr_body = build_mr_body(&to_apply, &flagged, &rejected, &applied);
 
-    // Stage all modified tool files
-    for name in &applied_names {
-        let path = format!("tools/{name}.toml");
-        run_git(&["add", &path])?;
+    let flagged_names = flagged.iter().map(|f| f.candidate.name.clone()).collect();
+    let rejected_names = rejected.iter().map(|r| r.candidate.name.clone()).collect();
+
+    let result = ApplyOutput {
+        applied,
+        rejected_names,
+        flagged_names,
+        branch_hint,
+        commit_message,
+        mr_title,
+        mr_body,
+        auto_merge_eligible,
+    };
+
+    let json =
+        serde_json::to_string_pretty(&result).context("failed to serialize apply-result.json")?;
+    std::fs::write(output, &json)
+        .with_context(|| format!("failed to write {}", output.display()))?;
+
+    eprintln!("\n{}", "=".repeat(60));
+    eprintln!("Applied: {}", result.applied.len());
+    for u in &result.applied {
+        eprintln!("  {}: {} -> {}", u.name, u.old_version, u.new_version);
     }
+    eprintln!("Auto-merge eligible: {}", result.auto_merge_eligible);
 
-    // Build commit message
-    let mut commit_lines = vec![format!("kit: tool updates {today}")];
-    commit_lines.push(String::new());
-    for update in &all_to_apply {
-        if applied_names.contains(&update.candidate.name) {
-            commit_lines.push(format!(
-                "- {}: {} -> {}",
-                update.candidate.name,
-                update.candidate.current_version,
-                update.candidate.new_version
-            ));
-        }
+    Ok(())
+}
+
+/// Build the commit message for CI to use.
+fn build_commit_message(today: &str, applied: &[AppliedUpdate]) -> String {
+    let mut lines = vec![format!("kit: tool updates {today}")];
+    lines.push(String::new());
+    for u in applied {
+        lines.push(format!("- {}: {} -> {}", u.name, u.old_version, u.new_version));
     }
-    commit_lines.push(String::new());
-    commit_lines.push("AI-Assisted: yes".to_string());
-    commit_lines.push("AI-Tools: kit CI".to_string());
+    lines.push(String::new());
+    lines.push("AI-Assisted: yes".to_string());
+    lines.push("AI-Tools: kit CI".to_string());
+    lines.join("\n")
+}
 
-    let commit_msg = commit_lines.join("\n");
-    run_git(&["commit", "-m", &commit_msg])?;
+/// Build the MR description body for CI to use.
+fn build_mr_body(
+    approved: &[&super::EvaluatedUpdate],
+    flagged: &[&super::EvaluatedUpdate],
+    rejected: &[&super::EvaluatedUpdate],
+    applied: &[AppliedUpdate],
+) -> String {
+    let applied_names: Vec<&str> = applied.iter().map(|a| a.name.as_str()).collect();
+    let mut body = String::from("## Tool Updates\n\n");
 
-    // Push the branch
-    run_git(&["push", "-u", "origin", &branch])?;
-
-    // Build MR description -- full audit trail
-    let mut mr_body = String::from("## Tool Updates\n\n");
-
-    if !to_apply.is_empty() {
-        mr_body.push_str("### Approved\n\n");
-        mr_body.push_str("| Tool | Version | Checksum | Evaluation |\n");
-        mr_body.push_str("|------|---------|----------|------------|\n");
-        for update in &to_apply {
-            if applied_names.contains(&update.candidate.name) {
+    if !approved.is_empty() {
+        body.push_str("### Approved\n\n");
+        body.push_str("| Tool | Version | Checksum | Evaluation |\n");
+        body.push_str("|------|---------|----------|------------|\n");
+        for update in approved {
+            if applied_names.contains(&update.candidate.name.as_str()) {
                 let checksum_status = format_checksum_status(&update.candidate);
-                mr_body.push_str(&format!(
+                body.push_str(&format!(
                     "| **{}** | {} -> {} | {} | {} |\n",
                     update.candidate.name,
                     update.candidate.current_version,
@@ -160,40 +258,39 @@ pub fn apply(input: &Path) -> Result<()> {
                 ));
             }
         }
-        mr_body.push('\n');
+        body.push('\n');
 
         // Detail section with reasoning
-        mr_body.push_str("<details>\n<summary>Approval details</summary>\n\n");
-        for update in &to_apply {
-            if applied_names.contains(&update.candidate.name) {
-                mr_body.push_str(&format!("**{}**\n", update.candidate.name));
+        body.push_str("<details>\n<summary>Approval details</summary>\n\n");
+        for update in approved {
+            if applied_names.contains(&update.candidate.name.as_str()) {
+                body.push_str(&format!("**{}**\n", update.candidate.name));
                 if let Some(ref reason) = update.eval_reason {
-                    mr_body.push_str(&format!("- Reason: {reason}\n"));
+                    body.push_str(&format!("- Reason: {reason}\n"));
                 }
                 if let Some(ref note) = update.candidate.note {
-                    mr_body.push_str(&format!("- Note: {note}\n"));
+                    body.push_str(&format!("- Note: {note}\n"));
                 }
-                // Checksum detail per platform
                 for (platform, verified) in &update.candidate.verified {
                     let status = match verified {
                         Some(true) => "verified",
                         Some(false) => "MISMATCH",
                         None => "unavailable",
                     };
-                    mr_body.push_str(&format!("- {platform}: {status}\n"));
+                    body.push_str(&format!("- {platform}: {status}\n"));
                 }
-                mr_body.push('\n');
+                body.push('\n');
             }
         }
-        mr_body.push_str("</details>\n\n");
+        body.push_str("</details>\n\n");
     }
 
     if !flagged.is_empty() {
-        mr_body.push_str("### Flagged for Review\n\n");
-        mr_body.push_str("| Tool | Version | Reason |\n");
-        mr_body.push_str("|------|---------|--------|\n");
-        for f in &flagged {
-            mr_body.push_str(&format!(
+        body.push_str("### Flagged for Review\n\n");
+        body.push_str("| Tool | Version | Reason |\n");
+        body.push_str("|------|---------|--------|\n");
+        for f in flagged {
+            body.push_str(&format!(
                 "| **{}** | {} -> {} | {} |\n",
                 f.candidate.name,
                 f.candidate.current_version,
@@ -201,30 +298,30 @@ pub fn apply(input: &Path) -> Result<()> {
                 f.eval_reason.as_deref().unwrap_or("needs review")
             ));
         }
-        mr_body.push('\n');
+        body.push('\n');
 
         if flagged.iter().any(|f| !f.review_reasons.is_empty()) {
-            mr_body.push_str("<details>\n<summary>Review details</summary>\n\n");
-            for f in &flagged {
-                mr_body.push_str(&format!("**{}**\n", f.candidate.name));
+            body.push_str("<details>\n<summary>Review details</summary>\n\n");
+            for f in flagged {
+                body.push_str(&format!("**{}**\n", f.candidate.name));
                 for reason in &f.review_reasons {
-                    mr_body.push_str(&format!("- {reason}\n"));
+                    body.push_str(&format!("- {reason}\n"));
                 }
                 if let Some(ref eval) = f.eval_reason {
-                    mr_body.push_str(&format!("- LLM assessment: {eval}\n"));
+                    body.push_str(&format!("- LLM assessment: {eval}\n"));
                 }
-                mr_body.push('\n');
+                body.push('\n');
             }
-            mr_body.push_str("</details>\n\n");
+            body.push_str("</details>\n\n");
         }
     }
 
     if !rejected.is_empty() {
-        mr_body.push_str("### Rejected\n\n");
-        mr_body.push_str("| Tool | Version | Reason |\n");
-        mr_body.push_str("|------|---------|--------|\n");
-        for r in &rejected {
-            mr_body.push_str(&format!(
+        body.push_str("### Rejected\n\n");
+        body.push_str("| Tool | Version | Reason |\n");
+        body.push_str("|------|---------|--------|\n");
+        for r in rejected {
+            body.push_str(&format!(
                 "| **{}** | {} -> {} | {} |\n",
                 r.candidate.name,
                 r.candidate.current_version,
@@ -232,88 +329,11 @@ pub fn apply(input: &Path) -> Result<()> {
                 r.eval_reason.as_deref().unwrap_or("rejected")
             ));
         }
-        mr_body.push('\n');
+        body.push('\n');
     }
 
-    mr_body.push_str("\n---\n*Generated by kit CI (sense/respond/verify pipeline)*\n");
-
-    // Create MR -- try glab first, fall back to API via CI_JOB_TOKEN
-    let mr_title = format!("kit: tool updates {today}");
-
-    let glab_ok = Command::new("glab")
-        .args([
-            "mr",
-            "create",
-            "--title",
-            &mr_title,
-            "--description",
-            &mr_body,
-            "--source-branch",
-            &branch,
-            "--remove-source-branch",
-            "--yes",
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if !glab_ok {
-        // Fallback: create MR via API using CI_JOB_TOKEN (works in CI without GITLAB_TOKEN)
-        if let (Ok(api_url), Ok(project_id), Ok(token)) = (
-            std::env::var("CI_API_V4_URL"),
-            std::env::var("CI_PROJECT_ID"),
-            std::env::var("CI_JOB_TOKEN"),
-        ) {
-            let mr_json = serde_json::json!({
-                "source_branch": branch,
-                "target_branch": "main",
-                "title": mr_title,
-                "description": mr_body,
-                "remove_source_branch": true,
-            });
-
-            let client = reqwest::blocking::Client::builder()
-                .https_only(true)
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .context("failed to create HTTP client")?;
-
-            match client
-                .post(format!("{api_url}/projects/{project_id}/merge_requests"))
-                .header("JOB-TOKEN", &token)
-                .json(&mr_json)
-                .send()
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    eprintln!("MR created via API: {mr_title}");
-                }
-                Ok(resp) => {
-                    eprintln!(
-                        "warning: API MR creation failed (HTTP {})",
-                        resp.status()
-                    );
-                    eprintln!("  branch {branch} was pushed -- create MR manually");
-                }
-                Err(e) => {
-                    eprintln!("warning: API MR creation failed ({e})");
-                    eprintln!("  branch {branch} was pushed -- create MR manually");
-                }
-            }
-        } else {
-            eprintln!("warning: glab mr create failed and no CI_JOB_TOKEN available");
-            eprintln!("  branch {branch} was pushed -- create MR manually");
-        }
-    } else {
-        eprintln!("MR created: {mr_title}");
-    }
-
-    eprintln!("\n{}", "=".repeat(60));
-    eprintln!("Applied: {}", applied_names.len());
-    for name in &applied_names {
-        eprintln!("  {name}");
-    }
-
-    Ok(())
+    body.push_str("\n---\n*Generated by kit CI (sense/respond/verify pipeline)*\n");
+    body
 }
 
 /// Update a tool TOML string with a new version and checksums.
@@ -392,26 +412,6 @@ fn format_checksum_status(candidate: &super::UpdateCandidate) -> String {
             format!("{verified}/{total} verified")
         }
     }
-}
-
-/// Run a git command in the current directory.
-fn run_git(args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute git {}", args.first().unwrap_or(&"")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "git {} failed (exit {}): {}",
-            args.first().unwrap_or(&""),
-            output.status,
-            stderr.trim()
-        );
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

@@ -436,7 +436,6 @@ impl ToolDef {
 
 /// Registry metadata from _meta.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RegistryMeta {
     pub registry: RegistryInfo,
     #[serde(default)]
@@ -444,7 +443,6 @@ pub struct RegistryMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RegistryInfo {
     pub name: String,
     #[serde(default)]
@@ -454,7 +452,6 @@ pub struct RegistryInfo {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RegistryPolicy {
     #[serde(default)]
     pub auto_merge_tiers: Vec<Tier>,
@@ -464,7 +461,21 @@ pub struct RegistryPolicy {
     pub auto_merge_requires_checksum: bool,
 }
 
-#[allow(dead_code)]
+impl RegistryPolicy {
+    /// Check whether an update qualifies for auto-merge under this policy.
+    pub fn is_auto_merge_eligible(
+        &self,
+        tier: Tier,
+        bump: &str,
+        checksums_verified: bool,
+    ) -> bool {
+        let tier_ok = self.auto_merge_tiers.contains(&tier);
+        let bump_ok = self.auto_merge_bump.iter().any(|b| b == bump);
+        let checksum_ok = !self.auto_merge_requires_checksum || checksums_verified;
+        tier_ok && bump_ok && checksum_ok
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -673,5 +684,57 @@ mod tests {
             checksums: HashMap::new(),
             signature: None,
         }
+    }
+
+    #[test]
+    fn auto_merge_eligible_low_patch_verified() {
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string(), "minor".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+        assert!(policy.is_auto_merge_eligible(Tier::Low, "patch", true));
+        assert!(policy.is_auto_merge_eligible(Tier::Low, "minor", true));
+    }
+
+    #[test]
+    fn auto_merge_rejects_wrong_tier() {
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+        assert!(!policy.is_auto_merge_eligible(Tier::High, "patch", true));
+        assert!(!policy.is_auto_merge_eligible(Tier::Own, "patch", true));
+    }
+
+    #[test]
+    fn auto_merge_rejects_major_bump() {
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string(), "minor".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+        assert!(!policy.is_auto_merge_eligible(Tier::Low, "major", true));
+    }
+
+    #[test]
+    fn auto_merge_rejects_unverified_when_required() {
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+        assert!(!policy.is_auto_merge_eligible(Tier::Low, "patch", false));
+    }
+
+    #[test]
+    fn auto_merge_allows_unverified_when_not_required() {
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string()],
+            auto_merge_requires_checksum: false,
+        };
+        assert!(policy.is_auto_merge_eligible(Tier::Low, "patch", false));
     }
 }
