@@ -22,7 +22,7 @@ use super::{
 };
 
 /// Classify a version bump as patch, minor, or major.
-fn classify_bump(current: &str, new: &str) -> BumpLevel {
+pub(crate) fn classify_bump(current: &str, new: &str) -> BumpLevel {
     let parse = |v: &str| -> (u64, u64, u64) {
         let parts: Vec<&str> = v.split('.').collect();
         let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
