@@ -864,16 +864,17 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         let old_global = config
             .mise_config_path()
             .unwrap_or_else(|_| std::path::PathBuf::from(""));
-        if old_global != mise_path && old_global.exists() {
-            if let Ok(content) = std::fs::read_to_string(&old_global) {
-                if content.starts_with("# Managed by kit") {
-                    let _ = std::fs::write(
-                        &old_global,
-                        "# Moved to conf.d/kit.toml by kit. Safe to delete this file.\n",
-                    );
-                    eprintln!("  migrated {} -> conf.d/", old_global.display());
-                }
-            }
+        if old_global != mise_path
+            && old_global.exists()
+            && std::fs::read_to_string(&old_global)
+                .map(|c| c.starts_with("# Managed by kit"))
+                .unwrap_or(false)
+        {
+            let _ = std::fs::write(
+                &old_global,
+                "# Moved to conf.d/kit.toml by kit. Safe to delete this file.\n",
+            );
+            eprintln!("  migrated {} -> conf.d/", old_global.display());
         }
     }
     eprintln!("  wrote {}", mise_path.display());

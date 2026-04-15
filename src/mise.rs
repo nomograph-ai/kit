@@ -202,11 +202,7 @@ fn find_kit_markers(content: &str) -> Option<(&str, &str)> {
     let end_abs = begin_pos + end_marker_pos;
     let after_end = &content[end_abs + KIT_END.len()..];
     // Skip the newline after kit:end if present
-    let after = if after_end.starts_with('\n') {
-        &after_end[1..]
-    } else {
-        after_end
-    };
+    let after = after_end.strip_prefix('\n').unwrap_or(after_end);
     Some((&content[..begin_pos], after))
 }
 
