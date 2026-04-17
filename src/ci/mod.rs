@@ -204,15 +204,13 @@ pub struct VerifyRegistryOutput {
 // Apply output types (kit apply → apply-result.json → CI shell)
 // ---------------------------------------------------------------------------
 
-/// Output of the apply phase — the contract between kit and CI.
+/// A group of updates that share the same merge policy.
+///
+/// The CI pipeline creates one branch + MR per group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyOutput {
-    /// Updates that were applied to TOML files on disk.
+pub struct ApplyGroup {
+    /// Updates in this group.
     pub applied: Vec<AppliedUpdate>,
-    /// Names of rejected updates (not applied).
-    pub rejected_names: Vec<String>,
-    /// Names of flagged updates (applied but need human review).
-    pub flagged_names: Vec<String>,
     /// Suggested git branch name.
     pub branch_hint: String,
     /// Pre-built commit message.
@@ -221,8 +219,23 @@ pub struct ApplyOutput {
     pub mr_title: String,
     /// MR description body (markdown).
     pub mr_body: String,
-    /// Whether all applied updates qualify for auto-merge per registry policy.
+    /// Whether this group qualifies for auto-merge.
     pub auto_merge_eligible: bool,
+}
+
+/// Output of the apply phase — the contract between kit and CI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyOutput {
+    /// Updates eligible for auto-merge per registry policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_merge_group: Option<ApplyGroup>,
+    /// Updates that need human review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_group: Option<ApplyGroup>,
+    /// Names of rejected updates (not applied).
+    pub rejected_names: Vec<String>,
+    /// Names of flagged updates (applied but need human review).
+    pub flagged_names: Vec<String>,
 }
 
 /// A single update that was applied to a tool TOML file.
@@ -241,6 +254,12 @@ pub struct AppliedUpdate {
     pub tier: String,
     /// Whether checksums were verified for all platforms.
     pub checksums_verified: bool,
+    /// LLM or rule-based evaluation reason (if any).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_reason: Option<String>,
+    /// Structured review reasons (e.g. "major bump", "checksum mismatch").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_reasons: Vec<String>,
 }
 
 // Re-export the entry points.
