@@ -12,7 +12,8 @@ git-based registries.
 
 kit resolves tool versions across multiple registries, generates
 [mise](https://mise.jdx.dev) configuration, verifies checksums and
-cosign signatures, and automates upstream update tracking.
+cosign signatures, and automates upstream update tracking via a
+three-pipeline CI architecture.
 
 ## Bootstrap
 
@@ -60,11 +61,10 @@ kit status
 | `kit remove <name>` | Remove a tool from a writable registry |
 | `kit pin <name> <version>` | Pin a tool's version locally |
 | `kit unpin <name>` | Remove a local pin |
-| `kit sense` | Detect upstream changes, classify updates (CI mode) |
-| `kit check` | Scan upstream for newer versions (CI mode) |
-| `kit evaluate` | LLM review for edge cases (CI mode) |
-| `kit apply` | Apply updates, create MR (CI mode) |
-| `kit verify-registry` | Validate all tool definitions before merge (CI mode) |
+| `kit sense` | Detect upstream changes, classify by risk (CI) |
+| `kit evaluate` | Rule-based + LLM review of findings (CI) |
+| `kit apply` | Update TOMLs, partition by auto-merge eligibility (CI) |
+| `kit verify-registry` | Validate all tool definitions before merge (CI) |
 | `kit init [--ci]` | Scaffold a new registry |
 | `kit completions <shell>` | Shell completions (bash/zsh/fish) |
 | `kit man-page` | Generate man page |
@@ -75,7 +75,7 @@ A registry is a git repo with per-tool TOML definitions:
 
 ```
 tools/
-  _meta.toml        # registry metadata + policy
+  _meta.toml        # registry metadata + merge policy
   gh.toml           # one file per tool
   muxr.toml
   ...
@@ -117,7 +117,27 @@ kit add claude-code --npm @anthropic-ai/claude-code
 kit add cargo-nextest --crates
 ```
 
-## Multi-registry
+### Trust tiers
+
+Each tool has a tier that controls merge policy:
+
+| Tier | Meaning | Typical policy |
+|------|---------|----------------|
+| own | Tools you build and publish | Auto-merge all bumps |
+| high | Critical third-party tools | Manual review |
+| low | Commodity tools | Auto-merge patch/minor |
+
+Tiers are set per-tool in the TOML definition. The registry's
+`_meta.toml` defines which tiers auto-merge:
+
+```toml
+[policy]
+auto_merge_tiers = ["own", "low"]
+auto_merge_bump = ["patch", "minor"]
+auto_merge_requires_checksum = true
+```
+
+### Multi-registry
 
 Configure multiple registries in `~/.config/kit/config.toml`. First
 registry wins when tools overlap. Local pins override.
@@ -128,10 +148,67 @@ name = "nomograph"
 url = "https://gitlab.com/nomograph/kits.git"
 
 [[registry]]
-name = "corp"
-url = "https://gitlab.com/corp/tools.git"
-readonly = true
+name = "personal"
+url = "https://gitlab.com/you/kits.git"
 ```
+
+Separate registries by trust boundary. For example, keep your own
+tools in one registry and third-party tools in another. Each
+registry has its own pipeline, merge policy, and update cadence.
+
+### Project-local
+
+kit discovers `kit.toml` by walking up from the working directory.
+When found, tools scope to that project:
+
+- `.kit.lock` next to `kit.toml` (committed to git)
+- `.mise.toml` merged with `# kit:begin` / `# kit:end` markers
+- User tools outside the markers are never touched
+
+## CI Pipeline
+
+kit powers a three-pipeline supply chain architecture via the
+[kit-registry](https://gitlab.com/nomograph/pipeline) CI component:
+
+```yaml
+include:
+  - component: gitlab.com/nomograph/pipeline/kit-registry@v3
+    inputs:
+      kit_version: "0.10.1"
+      mr_assignee: "andunn"
+```
+
+### Sense (scheduled, read-only)
+
+`kit sense` queries upstream releases, downloads assets, verifies
+checksums, and checks advisory databases. Classifies each finding
+by risk (bump level, tier, checksum status). Never fails on version
+drift -- drift is what it detects.
+
+### Evaluate (after sense)
+
+`kit evaluate` applies deterministic rules (auto-approve clean
+patches, reject checksum mismatches) and optionally invokes an LLM
+for edge cases (major bumps, missing checksums, advisories).
+
+### Apply (after evaluate)
+
+`kit apply` updates tool TOML files on disk and partitions updates
+into two groups by auto-merge eligibility:
+
+- **auto_merge_group** -- updates eligible per registry policy
+  (right tier, right bump, checksums verified)
+- **review_group** -- everything else (wrong tier, major bumps,
+  flagged by evaluator, unverified checksums)
+
+The CI component creates a separate branch and MR for each group.
+The auto-merge MR merges itself after the verify pipeline passes.
+The review MR stays open for human review.
+
+### Verify (on MR)
+
+`kit verify-registry` re-validates all tool definitions and
+re-verifies checksums. Runs on every MR as a merge gate.
 
 ## Security
 
