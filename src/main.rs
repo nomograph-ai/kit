@@ -882,7 +882,7 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     // 6. Run mise install
     eprint!("  running mise install... ");
     let mise_ok = match std::process::Command::new("mise")
-        .args(["install", "--yes"])
+        .args(["install", "--yes", "--quiet"])
         .status()
     {
         Ok(s) if s.success() => {
