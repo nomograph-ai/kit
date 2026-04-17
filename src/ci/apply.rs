@@ -16,7 +16,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::sense::classify_bump;
-use super::{AppliedUpdate, ApplyOutput, EvaluateOutput};
+use super::{AppliedUpdate, ApplyGroup, ApplyOutput, EvaluateOutput};
 use crate::tool::{self, Tier, ToolDef};
 
 /// Run the apply phase.
@@ -67,14 +67,10 @@ pub fn apply(input: &Path, output: &Path) -> Result<()> {
     if all_to_apply.is_empty() {
         eprintln!("Nothing to apply");
         let result = ApplyOutput {
-            applied: vec![],
+            auto_merge_group: None,
+            review_group: None,
             rejected_names: rejected.iter().map(|r| r.candidate.name.clone()).collect(),
             flagged_names: vec![],
-            branch_hint: String::new(),
-            commit_message: String::new(),
-            mr_title: String::new(),
-            mr_body: String::new(),
-            auto_merge_eligible: false,
         };
         let json = serde_json::to_string_pretty(&result)?;
         std::fs::write(output, &json)
@@ -148,20 +144,18 @@ pub fn apply(input: &Path, output: &Path) -> Result<()> {
             bump: bump.to_string(),
             tier: tier.to_string(),
             checksums_verified,
+            eval_reason: update.eval_reason.clone(),
+            review_reasons: update.review_reasons.clone(),
         });
     }
 
     if applied.is_empty() {
         eprintln!("No files were modified");
         let result = ApplyOutput {
-            applied: vec![],
+            auto_merge_group: None,
+            review_group: None,
             rejected_names: rejected.iter().map(|r| r.candidate.name.clone()).collect(),
             flagged_names: flagged.iter().map(|f| f.candidate.name.clone()).collect(),
-            branch_hint: String::new(),
-            commit_message: String::new(),
-            mr_title: String::new(),
-            mr_body: String::new(),
-            auto_merge_eligible: false,
         };
         let json = serde_json::to_string_pretty(&result)?;
         std::fs::write(output, &json)
@@ -169,38 +163,59 @@ pub fn apply(input: &Path, output: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Compute auto-merge eligibility
-    let auto_merge_eligible = applied.iter().all(|u| {
-        let tier = match u.tier.as_str() {
-            "own" => Tier::Own,
-            "high" => Tier::High,
-            _ => Tier::Low,
-        };
-        u.evaluation != "flag"
-            && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
-    });
+    // Partition applied updates by auto-merge eligibility
+    let (auto_eligible, review_needed): (Vec<AppliedUpdate>, Vec<AppliedUpdate>) =
+        applied.into_iter().partition(|u| {
+            let tier = match u.tier.as_str() {
+                "own" => Tier::Own,
+                "high" => Tier::High,
+                _ => Tier::Low,
+            };
+            u.evaluation != "flag"
+                && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+        });
 
-    // Build branch hint, commit message, MR title/body
+    // Build groups
     let now = chrono::Utc::now();
-    let branch_hint = format!("kit/update-{}", now.format("%Y%m%d-%H%M%S"));
+    let timestamp = now.format("%Y%m%d-%H%M%S").to_string();
     let today = now.format("%Y-%m-%d").to_string();
-    let mr_title = format!("kit: tool updates {today}");
 
-    let commit_message = build_commit_message(&today, &applied);
-    let mr_body = build_mr_body(&to_apply, &flagged, &rejected, &applied);
+    let auto_merge_group = if auto_eligible.is_empty() {
+        None
+    } else {
+        let mr_body = build_mr_body_for_group("Auto-Merge Updates", &auto_eligible, &rejected);
+        Some(ApplyGroup {
+            branch_hint: format!("kit/auto-{timestamp}"),
+            commit_message: build_commit_message(&today, &auto_eligible),
+            mr_title: format!("kit: auto-merge updates {today}"),
+            mr_body,
+            auto_merge_eligible: true,
+            applied: auto_eligible,
+        })
+    };
+
+    let review_group = if review_needed.is_empty() {
+        None
+    } else {
+        let mr_body = build_mr_body_for_group("Review Required", &review_needed, &rejected);
+        Some(ApplyGroup {
+            branch_hint: format!("kit/review-{timestamp}"),
+            commit_message: build_commit_message(&today, &review_needed),
+            mr_title: format!("kit: tool updates {today} (review)"),
+            mr_body,
+            auto_merge_eligible: false,
+            applied: review_needed,
+        })
+    };
 
     let flagged_names = flagged.iter().map(|f| f.candidate.name.clone()).collect();
     let rejected_names = rejected.iter().map(|r| r.candidate.name.clone()).collect();
 
     let result = ApplyOutput {
-        applied,
+        auto_merge_group,
+        review_group,
         rejected_names,
         flagged_names,
-        branch_hint,
-        commit_message,
-        mr_title,
-        mr_body,
-        auto_merge_eligible,
     };
 
     let json =
@@ -209,11 +224,18 @@ pub fn apply(input: &Path, output: &Path) -> Result<()> {
         .with_context(|| format!("failed to write {}", output.display()))?;
 
     eprintln!("\n{}", "=".repeat(60));
-    eprintln!("Applied: {}", result.applied.len());
-    for u in &result.applied {
-        eprintln!("  {}: {} -> {}", u.name, u.old_version, u.new_version);
+    if let Some(ref g) = result.auto_merge_group {
+        eprintln!("Auto-merge ({}):", g.applied.len());
+        for u in &g.applied {
+            eprintln!("  {}: {} -> {}", u.name, u.old_version, u.new_version);
+        }
     }
-    eprintln!("Auto-merge eligible: {}", result.auto_merge_eligible);
+    if let Some(ref g) = result.review_group {
+        eprintln!("Review needed ({}):", g.applied.len());
+        for u in &g.applied {
+            eprintln!("  {}: {} -> {}", u.name, u.old_version, u.new_version);
+        }
+    }
 
     Ok(())
 }
@@ -231,89 +253,48 @@ fn build_commit_message(today: &str, applied: &[AppliedUpdate]) -> String {
     lines.join("\n")
 }
 
-/// Build the MR description body for CI to use.
-fn build_mr_body(
-    approved: &[&super::EvaluatedUpdate],
-    flagged: &[&super::EvaluatedUpdate],
-    rejected: &[&super::EvaluatedUpdate],
+/// Build the MR description body for a single group.
+fn build_mr_body_for_group(
+    heading: &str,
     applied: &[AppliedUpdate],
+    rejected: &[&super::EvaluatedUpdate],
 ) -> String {
-    let applied_names: Vec<&str> = applied.iter().map(|a| a.name.as_str()).collect();
-    let mut body = String::from("## Tool Updates\n\n");
+    let mut body = format!("## {heading}\n\n");
 
-    if !approved.is_empty() {
-        body.push_str("### Approved\n\n");
-        body.push_str("| Tool | Version | Checksum | Evaluation |\n");
-        body.push_str("|------|---------|----------|------------|\n");
-        for update in approved {
-            if applied_names.contains(&update.candidate.name.as_str()) {
-                let checksum_status = format_checksum_status(&update.candidate);
-                body.push_str(&format!(
-                    "| **{}** | {} -> {} | {} | {} |\n",
-                    update.candidate.name,
-                    update.candidate.current_version,
-                    update.candidate.new_version,
-                    checksum_status,
-                    update.evaluation,
-                ));
-            }
-        }
-        body.push('\n');
+    body.push_str("| Tool | Version | Tier | Bump | Checksums |\n");
+    body.push_str("|------|---------|------|------|-----------|\n");
+    for u in applied {
+        let checksum_label = if u.checksums_verified {
+            "verified"
+        } else {
+            "unverified"
+        };
+        body.push_str(&format!(
+            "| **{}** | {} -> {} | {} | {} | {} |\n",
+            u.name, u.old_version, u.new_version, u.tier, u.bump, checksum_label,
+        ));
+    }
+    body.push('\n');
 
-        // Detail section with reasoning
-        body.push_str("<details>\n<summary>Approval details</summary>\n\n");
-        for update in approved {
-            if applied_names.contains(&update.candidate.name.as_str()) {
-                body.push_str(&format!("**{}**\n", update.candidate.name));
-                if let Some(ref reason) = update.eval_reason {
-                    body.push_str(&format!("- Reason: {reason}\n"));
+    // Include eval reasons for flagged or reviewed items
+    let has_reasons = applied
+        .iter()
+        .any(|u| u.eval_reason.is_some() || !u.review_reasons.is_empty());
+    if has_reasons {
+        body.push_str("<details>\n<summary>Review details</summary>\n\n");
+        for u in applied {
+            if u.eval_reason.is_some() || !u.review_reasons.is_empty() {
+                body.push_str(&format!("**{}**\n", u.name));
+                for reason in &u.review_reasons {
+                    body.push_str(&format!("- {reason}\n"));
                 }
-                if let Some(ref note) = update.candidate.note {
-                    body.push_str(&format!("- Note: {note}\n"));
-                }
-                for (platform, verified) in &update.candidate.verified {
-                    let status = match verified {
-                        Some(true) => "verified",
-                        Some(false) => "MISMATCH",
-                        None => "unavailable",
-                    };
-                    body.push_str(&format!("- {platform}: {status}\n"));
+                if let Some(ref eval) = u.eval_reason {
+                    body.push_str(&format!("- Assessment: {eval}\n"));
                 }
                 body.push('\n');
             }
         }
         body.push_str("</details>\n\n");
-    }
-
-    if !flagged.is_empty() {
-        body.push_str("### Flagged for Review\n\n");
-        body.push_str("| Tool | Version | Reason |\n");
-        body.push_str("|------|---------|--------|\n");
-        for f in flagged {
-            body.push_str(&format!(
-                "| **{}** | {} -> {} | {} |\n",
-                f.candidate.name,
-                f.candidate.current_version,
-                f.candidate.new_version,
-                f.eval_reason.as_deref().unwrap_or("needs review")
-            ));
-        }
-        body.push('\n');
-
-        if flagged.iter().any(|f| !f.review_reasons.is_empty()) {
-            body.push_str("<details>\n<summary>Review details</summary>\n\n");
-            for f in flagged {
-                body.push_str(&format!("**{}**\n", f.candidate.name));
-                for reason in &f.review_reasons {
-                    body.push_str(&format!("- {reason}\n"));
-                }
-                if let Some(ref eval) = f.eval_reason {
-                    body.push_str(&format!("- LLM assessment: {eval}\n"));
-                }
-                body.push('\n');
-            }
-            body.push_str("</details>\n\n");
-        }
     }
 
     if !rejected.is_empty() {
@@ -385,33 +366,6 @@ fn update_tool_toml(
     }
 
     Ok(Some(doc.to_string()))
-}
-
-/// Format the checksum verification status for MR display.
-fn format_checksum_status(candidate: &super::UpdateCandidate) -> String {
-    if candidate.verified.is_empty() {
-        return "no checksums".to_string();
-    }
-    let verified = candidate
-        .verified
-        .values()
-        .filter(|v| **v == Some(true))
-        .count();
-    let total = candidate.verified.len();
-    if verified == total {
-        format!("{verified}/{total} verified")
-    } else {
-        let failed = candidate
-            .verified
-            .values()
-            .filter(|v| **v == Some(false))
-            .count();
-        if failed > 0 {
-            format!("{verified}/{total} verified, {failed} MISMATCH")
-        } else {
-            format!("{verified}/{total} verified")
-        }
-    }
 }
 
 #[cfg(test)]
@@ -529,6 +483,154 @@ key = "value"
         let result = update_tool_toml(input, "1.0.0", &HashMap::new()).unwrap();
         assert!(result.is_none(), "should return None without [tool] table");
     }
+
+    // -- Partition logic tests --
+
+    fn make_update(name: &str, tier: &str, bump: &str, checksums_verified: bool) -> AppliedUpdate {
+        AppliedUpdate {
+            name: name.to_string(),
+            old_version: "1.0.0".to_string(),
+            new_version: "1.0.1".to_string(),
+            file: format!("tools/{name}.toml"),
+            evaluation: "auto-approved".to_string(),
+            bump: bump.to_string(),
+            tier: tier.to_string(),
+            checksums_verified,
+            eval_reason: None,
+            review_reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn partition_mixed_batch_splits_by_eligibility() {
+        use crate::tool::{RegistryPolicy, Tier};
+
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string(), "minor".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+
+        let updates = vec![
+            make_update("uv", "low", "patch", true),
+            make_update("yq", "low", "minor", true),
+            make_update("glab", "high", "minor", true),
+            make_update("rune", "own", "minor", true),
+        ];
+
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
+            updates.into_iter().partition(|u| {
+                let tier = match u.tier.as_str() {
+                    "own" => Tier::Own,
+                    "high" => Tier::High,
+                    _ => Tier::Low,
+                };
+                u.evaluation != "flag"
+                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+            });
+
+        assert_eq!(auto_eligible.len(), 2, "uv and yq should auto-merge");
+        assert_eq!(review_needed.len(), 2, "glab and rune need review");
+        assert!(auto_eligible.iter().all(|u| u.tier == "low"));
+        assert!(review_needed.iter().any(|u| u.tier == "high"));
+        assert!(review_needed.iter().any(|u| u.tier == "own"));
+    }
+
+    #[test]
+    fn partition_all_low_tier_puts_everything_in_auto() {
+        use crate::tool::{RegistryPolicy, Tier};
+
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string(), "minor".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+
+        let updates = vec![
+            make_update("uv", "low", "patch", true),
+            make_update("yq", "low", "minor", true),
+            make_update("glow", "low", "patch", true),
+        ];
+
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
+            updates.into_iter().partition(|u| {
+                let tier = match u.tier.as_str() {
+                    "own" => Tier::Own,
+                    "high" => Tier::High,
+                    _ => Tier::Low,
+                };
+                u.evaluation != "flag"
+                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+            });
+
+        assert_eq!(auto_eligible.len(), 3);
+        assert!(review_needed.is_empty());
+    }
+
+    #[test]
+    fn partition_unverified_checksum_goes_to_review() {
+        use crate::tool::{RegistryPolicy, Tier};
+
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+
+        let updates = vec![
+            make_update("uv", "low", "patch", true),
+            make_update("dolt", "low", "patch", false), // no checksums
+        ];
+
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
+            updates.into_iter().partition(|u| {
+                let tier = match u.tier.as_str() {
+                    "own" => Tier::Own,
+                    "high" => Tier::High,
+                    _ => Tier::Low,
+                };
+                u.evaluation != "flag"
+                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+            });
+
+        assert_eq!(auto_eligible.len(), 1, "uv should auto-merge");
+        assert_eq!(auto_eligible[0].name, "uv");
+        assert_eq!(review_needed.len(), 1, "dolt needs review");
+        assert_eq!(review_needed[0].name, "dolt");
+    }
+
+    #[test]
+    fn partition_flagged_evaluation_goes_to_review() {
+        use crate::tool::{RegistryPolicy, Tier};
+
+        let policy = RegistryPolicy {
+            auto_merge_tiers: vec![Tier::Low],
+            auto_merge_bump: vec!["patch".to_string()],
+            auto_merge_requires_checksum: true,
+        };
+
+        let mut flagged = make_update("hugo", "low", "patch", true);
+        flagged.evaluation = "flag".to_string();
+
+        let updates = vec![make_update("uv", "low", "patch", true), flagged];
+
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
+            updates.into_iter().partition(|u| {
+                let tier = match u.tier.as_str() {
+                    "own" => Tier::Own,
+                    "high" => Tier::High,
+                    _ => Tier::Low,
+                };
+                u.evaluation != "flag"
+                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+            });
+
+        assert_eq!(auto_eligible.len(), 1);
+        assert_eq!(review_needed.len(), 1);
+        assert_eq!(review_needed[0].name, "hugo");
+    }
+
+    // -- TOML manipulation tests --
 
     #[test]
     fn preserves_formatting_and_other_fields() {
