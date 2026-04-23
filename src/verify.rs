@@ -103,7 +103,10 @@ pub fn parse_checksum_file(
 /// Ensure a string looks like a valid hex-encoded SHA256 hash.
 fn validate_hex_hash(h: &str) -> Result<()> {
     if h.len() != 64 {
-        anyhow::bail!("expected 64-character SHA256 hash, got {} characters", h.len());
+        anyhow::bail!(
+            "expected 64-character SHA256 hash, got {} characters",
+            h.len()
+        );
     }
     if !h.chars().all(|c| c.is_ascii_hexdigit()) {
         anyhow::bail!("hash contains non-hex characters: {h}");
@@ -125,10 +128,7 @@ fn https_client() -> Result<reqwest::blocking::Client> {
 /// Returns the expected hash -- does NOT compare against an actual binary.
 /// Callers must compare the result themselves.
 /// Checks inline checksums first, falls back to downloading upstream checksum file.
-pub fn resolve_expected_checksum(
-    tool: &ToolDef,
-    platform: Platform,
-) -> Result<VerifyResult> {
+pub fn resolve_expected_checksum(tool: &ToolDef, platform: Platform) -> Result<VerifyResult> {
     // First, check for inline pre-computed checksums.
     let asset_name = match tool.asset_for(platform) {
         Some(a) => a,
@@ -193,9 +193,7 @@ pub fn resolve_expected_checksum(
             None => {
                 return Ok(VerifyResult::Failed {
                     method: "sha256".to_string(),
-                    reason: format!(
-                        "asset '{asset_name}' not found in checksum file"
-                    ),
+                    reason: format!("asset '{asset_name}' not found in checksum file"),
                 });
             }
         }
@@ -231,8 +229,7 @@ pub fn verify_cosign(
     }
     let bundle_bytes = resp.bytes().context("failed to read bundle body")?;
 
-    let tmp_dir =
-        tempfile::tempdir().context("failed to create temp dir for cosign bundle")?;
+    let tmp_dir = tempfile::tempdir().context("failed to create temp dir for cosign bundle")?;
     let bundle_path = tmp_dir.path().join("bundle.json");
     std::fs::write(&bundle_path, &bundle_bytes)
         .context("failed to write cosign bundle to temp file")?;
@@ -283,9 +280,7 @@ pub fn resolve_binary_path(tool: &ToolDef) -> Option<std::path::PathBuf> {
     let bin_name = tool.bin_name();
 
     // Primary: ask mise for the authoritative path.
-    if let Ok(output) = Command::new("mise")
-        .args(["which", bin_name])
-        .output()
+    if let Ok(output) = Command::new("mise").args(["which", bin_name]).output()
         && output.status.success()
     {
         let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -335,11 +330,7 @@ pub fn is_archive_asset(tool: &ToolDef, platform: Platform) -> bool {
 ///
 /// `binary_path` is the resolved path to the installed binary (use
 /// `resolve_binary_path` or `mise which` to obtain it).
-pub fn verify_tool(
-    tool: &ToolDef,
-    platform: Platform,
-    binary_path: &Path,
-) -> Result<VerifyResult> {
+pub fn verify_tool(tool: &ToolDef, platform: Platform, binary_path: &Path) -> Result<VerifyResult> {
     if !binary_path.exists() {
         return Ok(VerifyResult::Failed {
             method: "pre-check".to_string(),
@@ -364,51 +355,49 @@ pub fn verify_tool(
         && sig.method == SignatureMethod::CosignKeyless
         && !archive
     {
-            let issuer = sig
-                .issuer
-                .as_deref()
-                .context("cosign-keyless requires 'issuer' in signature config")?;
-            let identity = sig
-                .identity
-                .as_deref()
-                .context("cosign-keyless requires 'identity' in signature config")?;
+        let issuer = sig
+            .issuer
+            .as_deref()
+            .context("cosign-keyless requires 'issuer' in signature config")?;
+        let identity = sig
+            .identity
+            .as_deref()
+            .context("cosign-keyless requires 'identity' in signature config")?;
 
-            // Construct the bundle URL (same base as the binary, with .bundle suffix).
-            // Append .bundle to the full URL rather than using replace(), which
-            // could corrupt the URL if the asset name appears in the path prefix.
-            let bundle_url = tool
-                .url_for(platform)
-                .map(|u| format!("{u}.bundle"))
-                .context("cannot determine bundle URL")?;
+        // Construct the bundle URL (same base as the binary, with .bundle suffix).
+        // Append .bundle to the full URL rather than using replace(), which
+        // could corrupt the URL if the asset name appears in the path prefix.
+        let bundle_url = tool
+            .url_for(platform)
+            .map(|u| format!("{u}.bundle"))
+            .context("cannot determine bundle URL")?;
 
-            match verify_cosign(binary_path, &bundle_url, issuer, identity) {
-                Ok(true) => {
-                    // Cosign passed; still verify checksum if available.
-                    let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
-                    if let Some(VerifyResult::Failed { method, reason }) = checksum_result {
-                        return Ok(VerifyResult::Failed {
-                            method: format!("cosign-keyless+{method}"),
-                            reason,
-                        });
-                    }
-                    return Ok(VerifyResult::Verified {
-                        method: "cosign-keyless".to_string(),
-                        sha256: actual_sha,
-                    });
-                }
-                Ok(false) => {
+        match verify_cosign(binary_path, &bundle_url, issuer, identity) {
+            Ok(true) => {
+                // Cosign passed; still verify checksum if available.
+                let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
+                if let Some(VerifyResult::Failed { method, reason }) = checksum_result {
                     return Ok(VerifyResult::Failed {
-                        method: "cosign-keyless".to_string(),
-                        reason: "cosign verify-blob returned non-zero".to_string(),
+                        method: format!("cosign-keyless+{method}"),
+                        reason,
                     });
                 }
-                Err(e) => {
-                    // cosign not installed or other execution error -- fall through
-                    eprintln!(
-                        "  warning: cosign verification failed ({e:#}), falling back"
-                    );
-                }
+                return Ok(VerifyResult::Verified {
+                    method: "cosign-keyless".to_string(),
+                    sha256: actual_sha,
+                });
             }
+            Ok(false) => {
+                return Ok(VerifyResult::Failed {
+                    method: "cosign-keyless".to_string(),
+                    reason: "cosign verify-blob returned non-zero".to_string(),
+                });
+            }
+            Err(e) => {
+                // cosign not installed or other execution error -- fall through
+                eprintln!("  warning: cosign verification failed ({e:#}), falling back");
+            }
+        }
     }
 
     // -- 2. GitHub attestation --
@@ -417,37 +406,35 @@ pub fn verify_tool(
         && sig.method == SignatureMethod::GithubAttestation
         && !archive
     {
-            let repo = tool
-                .repo
-                .as_deref()
-                .context("github-attestation requires 'repo' on tool definition")?;
+        let repo = tool
+            .repo
+            .as_deref()
+            .context("github-attestation requires 'repo' on tool definition")?;
 
-            match verify_gh_attestation(binary_path, repo) {
-                Ok(true) => {
-                    let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
-                    if let Some(VerifyResult::Failed { method, reason }) = checksum_result {
-                        return Ok(VerifyResult::Failed {
-                            method: format!("github-attestation+{method}"),
-                            reason,
-                        });
-                    }
-                    return Ok(VerifyResult::Verified {
-                        method: "github-attestation".to_string(),
-                        sha256: actual_sha,
-                    });
-                }
-                Ok(false) => {
+        match verify_gh_attestation(binary_path, repo) {
+            Ok(true) => {
+                let checksum_result = verify_checksum_against_binary(tool, platform, &actual_sha);
+                if let Some(VerifyResult::Failed { method, reason }) = checksum_result {
                     return Ok(VerifyResult::Failed {
-                        method: "github-attestation".to_string(),
-                        reason: "gh attestation verify returned non-zero".to_string(),
+                        method: format!("github-attestation+{method}"),
+                        reason,
                     });
                 }
-                Err(e) => {
-                    eprintln!(
-                        "  warning: gh attestation check failed ({e:#}), falling back"
-                    );
-                }
+                return Ok(VerifyResult::Verified {
+                    method: "github-attestation".to_string(),
+                    sha256: actual_sha,
+                });
             }
+            Ok(false) => {
+                return Ok(VerifyResult::Failed {
+                    method: "github-attestation".to_string(),
+                    reason: "gh attestation verify returned non-zero".to_string(),
+                });
+            }
+            Err(e) => {
+                eprintln!("  warning: gh attestation check failed ({e:#}), falling back");
+            }
+        }
     }
 
     // -- 3. SHA256 checksum --
@@ -469,9 +456,7 @@ pub fn verify_tool(
                 } else {
                     return Ok(VerifyResult::Failed {
                         method,
-                        reason: format!(
-                            "checksum mismatch: expected {expected}, got {actual_sha}"
-                        ),
+                        reason: format!("checksum mismatch: expected {expected}, got {actual_sha}"),
                     });
                 }
             }
@@ -508,19 +493,21 @@ fn verify_checksum_against_binary(
         return None;
     }
     match resolve_expected_checksum(tool, platform) {
-        Ok(VerifyResult::Verified { sha256: expected, .. }) => {
+        Ok(VerifyResult::Verified {
+            sha256: expected, ..
+        }) => {
             if actual_sha != expected {
                 Some(VerifyResult::Failed {
                     method: "sha256".to_string(),
-                    reason: format!(
-                        "checksum mismatch: expected {expected}, got {actual_sha}"
-                    ),
+                    reason: format!("checksum mismatch: expected {expected}, got {actual_sha}"),
                 })
             } else {
                 None
             }
         }
-        Ok(VerifyResult::Failed { method, reason }) => Some(VerifyResult::Failed { method, reason }),
+        Ok(VerifyResult::Failed { method, reason }) => {
+            Some(VerifyResult::Failed { method, reason })
+        }
         _ => None,
     }
 }
@@ -582,25 +569,17 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  gh_2.89.0_macO
         let content = "\
 a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  other-file.tar.gz
 ";
-        let result = parse_checksum_file(
-            content,
-            "missing-asset.zip",
-            &ChecksumFormat::Sha256,
-        )
-        .unwrap();
+        let result =
+            parse_checksum_file(content, "missing-asset.zip", &ChecksumFormat::Sha256).unwrap();
         assert_eq!(result, None);
     }
 
     #[test]
     fn parse_checksum_sha256_per_asset() {
-        let content =
-            "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n";
-        let result = parse_checksum_file(
-            content,
-            "anything.tar.gz",
-            &ChecksumFormat::Sha256PerAsset,
-        )
-        .unwrap();
+        let content = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n";
+        let result =
+            parse_checksum_file(content, "anything.tar.gz", &ChecksumFormat::Sha256PerAsset)
+                .unwrap();
         assert_eq!(
             result,
             Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string())
@@ -627,8 +606,7 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  other-file.tar
     fn parse_checksum_rejects_bad_hash() {
         // Too short.
         let content = "deadbeef  some-file.tar.gz\n";
-        let result =
-            parse_checksum_file(content, "some-file.tar.gz", &ChecksumFormat::Sha256);
+        let result = parse_checksum_file(content, "some-file.tar.gz", &ChecksumFormat::Sha256);
         assert!(result.is_err());
     }
 
@@ -638,12 +616,7 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  other-file.tar
 # This is a comment
 a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
 ";
-        let result = parse_checksum_file(
-            content,
-            "target.bin",
-            &ChecksumFormat::Sha256,
-        )
-        .unwrap();
+        let result = parse_checksum_file(content, "target.bin", &ChecksumFormat::Sha256).unwrap();
         assert_eq!(
             result,
             Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string())
@@ -665,7 +638,10 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
             f.write_all(b"some binary content").unwrap();
         }
         let actual_hash = compute_sha256(&path).unwrap();
-        assert_ne!(actual_hash, expected, "hash should not match fabricated expected value");
+        assert_ne!(
+            actual_hash, expected,
+            "hash should not match fabricated expected value"
+        );
     }
 
     #[test]
@@ -723,13 +699,19 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
 
     #[test]
     fn is_archive_detects_tar_xz() {
-        let tool = make_tool("sc", vec![("macos-arm64", "shellcheck-v1.0.0.darwin.aarch64.tar.xz")]);
+        let tool = make_tool(
+            "sc",
+            vec![("macos-arm64", "shellcheck-v1.0.0.darwin.aarch64.tar.xz")],
+        );
         assert!(is_archive_asset(&tool, Platform::MacosArm64));
     }
 
     #[test]
     fn is_archive_detects_pkg() {
-        let tool = make_tool("hugo", vec![("macos-arm64", "hugo_extended_1.0.0_darwin-universal.pkg")]);
+        let tool = make_tool(
+            "hugo",
+            vec![("macos-arm64", "hugo_extended_1.0.0_darwin-universal.pkg")],
+        );
         assert!(is_archive_asset(&tool, Platform::MacosArm64));
     }
 
@@ -757,7 +739,8 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
         let expected_hash = compute_sha256(&binary).unwrap();
 
         let mut tool = make_tool("test-tool", vec![("macos-arm64", "test-tool-darwin-arm64")]);
-        tool.checksums.insert("macos-arm64".to_string(), expected_hash.clone());
+        tool.checksums
+            .insert("macos-arm64".to_string(), expected_hash.clone());
 
         let result = verify_tool(&tool, Platform::MacosArm64, &binary).unwrap();
         assert!(result.is_verified());

@@ -28,14 +28,15 @@ pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
         .with_context(|| format!("failed to read {}", input.display()))?;
 
     // Try sense-report.json format first, fall back to legacy updates.json
-    let (data, sense_context) = if let Ok(sense_report) = serde_json::from_str::<SenseReport>(&content) {
-        let check_output = sense_report_to_check_output(&sense_report);
-        (check_output, Some(sense_report.findings))
-    } else {
-        let check_output: CheckOutput =
-            serde_json::from_str(&content).context("failed to parse input as updates.json or sense-report.json")?;
-        (check_output, None)
-    };
+    let (data, sense_context) =
+        if let Ok(sense_report) = serde_json::from_str::<SenseReport>(&content) {
+            let check_output = sense_report_to_check_output(&sense_report);
+            (check_output, Some(sense_report.findings))
+        } else {
+            let check_output: CheckOutput = serde_json::from_str(&content)
+                .context("failed to parse input as updates.json or sense-report.json")?;
+            (check_output, None)
+        };
 
     if data.updates.is_empty() {
         eprintln!("No updates to evaluate");
@@ -75,10 +76,8 @@ pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
             let prompt = build_prompt(&needs_review);
             match call_haiku(&key, &model, &prompt) {
                 Ok(Some(decisions)) => {
-                    let decision_map: HashMap<String, HaikuDecision> = decisions
-                        .into_iter()
-                        .map(|d| (d.name.clone(), d))
-                        .collect();
+                    let decision_map: HashMap<String, HaikuDecision> =
+                        decisions.into_iter().map(|d| (d.name.clone(), d)).collect();
 
                     for mut update in needs_review {
                         let decision = decision_map.get(&update.candidate.name);
@@ -140,7 +139,8 @@ pub fn evaluate(input: &Path, output: &Path) -> Result<()> {
         },
     };
 
-    let json = serde_json::to_string_pretty(&result).context("failed to serialize evaluated.json")?;
+    let json =
+        serde_json::to_string_pretty(&result).context("failed to serialize evaluated.json")?;
     std::fs::write(output, &json)
         .with_context(|| format!("failed to write {}", output.display()))?;
 
@@ -171,10 +171,7 @@ fn classify(updates: &[UpdateCandidate]) -> (Vec<EvaluatedUpdate>, Vec<Evaluated
         let mut reasons: Vec<String> = Vec::new();
 
         // Checksum mismatch: reject immediately
-        let has_mismatch = update
-            .verified
-            .values()
-            .any(|v| *v == Some(false));
+        let has_mismatch = update.verified.values().any(|v| *v == Some(false));
         if has_mismatch {
             reasons.push("CHECKSUM MISMATCH -- possible supply chain attack".to_string());
         }
@@ -487,12 +484,8 @@ mod tests {
             current_version: "1.0.0".to_string(),
             new_version: "1.0.1".to_string(),
             tag: "v1.0.1".to_string(),
-            checksums: HashMap::from([
-                ("macos-arm64".to_string(), Some("abc".to_string())),
-            ]),
-            verified: HashMap::from([
-                ("macos-arm64".to_string(), Some(false)),
-            ]),
+            checksums: HashMap::from([("macos-arm64".to_string(), Some("abc".to_string()))]),
+            verified: HashMap::from([("macos-arm64".to_string(), Some(false))]),
             note: None,
         };
 
@@ -510,12 +503,8 @@ mod tests {
             current_version: "1.2.3".to_string(),
             new_version: "2.0.0".to_string(),
             tag: "v2.0.0".to_string(),
-            checksums: HashMap::from([
-                ("macos-arm64".to_string(), Some("abc".to_string())),
-            ]),
-            verified: HashMap::from([
-                ("macos-arm64".to_string(), Some(true)),
-            ]),
+            checksums: HashMap::from([("macos-arm64".to_string(), Some("abc".to_string()))]),
+            verified: HashMap::from([("macos-arm64".to_string(), Some(true))]),
             note: None,
         };
 

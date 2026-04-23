@@ -201,7 +201,10 @@ fn check_gitlab(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
 
     let output = run_cmd(
         "glab",
-        &["api", &format!("projects/{project_ref}/releases?per_page=5")],
+        &[
+            "api",
+            &format!("projects/{project_ref}/releases?per_page=5"),
+        ],
         None,
     )?;
 
@@ -319,7 +322,10 @@ fn check_npm(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     let output = match run_cmd("npm", &["view", package, "version"], None) {
         Ok(o) => o,
         Err(_) => {
-            eprintln!("  {}: {} (skip -- npm not available)", def.name, def.version);
+            eprintln!(
+                "  {}: {} (skip -- npm not available)",
+                def.name, def.version
+            );
             return Ok(None);
         }
     };
@@ -346,7 +352,10 @@ fn check_crates(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     let output = match run_cmd("cargo", &["search", crate_name, "--limit", "1"], None) {
         Ok(o) => o,
         Err(_) => {
-            eprintln!("  {}: {} (skip -- cargo not available)", def.name, def.version);
+            eprintln!(
+                "  {}: {} (skip -- cargo not available)",
+                def.name, def.version
+            );
             return Ok(None);
         }
     };
@@ -354,7 +363,12 @@ fn check_crates(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
     // Parse: crate_name = "version"
     let latest = output
         .lines()
-        .find(|line| line.split('=').next().map(|name| name.trim() == crate_name).unwrap_or(false))
+        .find(|line| {
+            line.split('=')
+                .next()
+                .map(|name| name.trim() == crate_name)
+                .unwrap_or(false)
+        })
         .and_then(|line| {
             let start = line.find('"')?;
             let end = line[start + 1..].find('"')?;
@@ -417,12 +431,7 @@ fn asset_url_for(def: &ToolDef, version: &str, tag: &str, platform: Platform) ->
 }
 
 /// Build the checksum file URL for a tool at a given version and tag.
-fn checksum_url_for(
-    def: &ToolDef,
-    version: &str,
-    tag: &str,
-    platform: Platform,
-) -> Option<String> {
+fn checksum_url_for(def: &ToolDef, version: &str, tag: &str, platform: Platform) -> Option<String> {
     let cfg = def.checksum.as_ref()?;
     let file = cfg.file.as_ref()?;
 
@@ -476,7 +485,16 @@ fn download_and_verify(
         None => return Ok(()),
     };
 
-    download_and_verify_url(def, version, tag, platform, &asset_name, &url, tmp_dir, candidate)
+    download_and_verify_url(
+        def,
+        version,
+        tag,
+        platform,
+        &asset_name,
+        &url,
+        tmp_dir,
+        candidate,
+    )
 }
 
 /// Download from a specific URL and verify checksum.
@@ -508,16 +526,12 @@ fn download_and_verify_url(
                 platform.key(),
                 resp.status()
             );
-            candidate
-                .checksums
-                .insert(platform.key().to_string(), None);
+            candidate.checksums.insert(platform.key().to_string(), None);
             return Ok(());
         }
         Err(e) => {
             eprintln!("    warning: download failed for {}: {e}", platform.key());
-            candidate
-                .checksums
-                .insert(platform.key().to_string(), None);
+            candidate.checksums.insert(platform.key().to_string(), None);
             return Ok(());
         }
     }
@@ -562,22 +576,15 @@ fn download_and_verify_url(
                             }
                         }
                         Ok(None) => {
-                            eprintln!(
-                                "    warning: {} not found in checksum file",
-                                asset_name
-                            );
-                            candidate
-                                .verified
-                                .insert(platform.key().to_string(), None);
+                            eprintln!("    warning: {} not found in checksum file", asset_name);
+                            candidate.verified.insert(platform.key().to_string(), None);
                         }
                         Err(e) => {
                             eprintln!(
                                 "    warning: checksum parse error for {}: {e}",
                                 platform.key()
                             );
-                            candidate
-                                .verified
-                                .insert(platform.key().to_string(), None);
+                            candidate.verified.insert(platform.key().to_string(), None);
                         }
                     }
                 }
@@ -635,8 +642,7 @@ fn check_advisories(def: &ToolDef) -> Result<Vec<Advisory>> {
         return Ok(vec![]);
     }
 
-    let raw: Vec<serde_json::Value> =
-        serde_json::from_str(trimmed).unwrap_or_default();
+    let raw: Vec<serde_json::Value> = serde_json::from_str(trimmed).unwrap_or_default();
 
     Ok(raw
         .iter()
@@ -701,8 +707,7 @@ fn gh_latest_stable_tag(repo: &str) -> Result<Option<String>> {
     );
 
     if let Some(text) = list_output {
-        let releases: Vec<serde_json::Value> =
-            serde_json::from_str(&text).unwrap_or_default();
+        let releases: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
 
         // Find first non-prerelease
         for r in &releases {
