@@ -33,11 +33,15 @@ const BRANCH_PATTERN: &str = r"^[a-zA-Z0-9._/\-]+$";
 // F17: compiled regex statics -- avoids recompilation in hot loops
 static NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(NAME_PATTERN).unwrap());
 static BIN_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(BIN_PATTERN).unwrap());
-static VERSION_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(VERSION_PATTERN).unwrap());
+static VERSION_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(VERSION_PATTERN).unwrap());
 static REPO_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(REPO_PATTERN).unwrap());
-static ASSET_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(ASSET_PATTERN).unwrap());
-static TAG_PREFIX_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(TAG_PREFIX_PATTERN).unwrap());
-static BRANCH_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(BRANCH_PATTERN).unwrap());
+static ASSET_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(ASSET_PATTERN).unwrap());
+static TAG_PREFIX_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(TAG_PREFIX_PATTERN).unwrap());
+static BRANCH_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(BRANCH_PATTERN).unwrap());
 
 /// Trust tiers control review policy for updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,12 +467,7 @@ pub struct RegistryPolicy {
 
 impl RegistryPolicy {
     /// Check whether an update qualifies for auto-merge under this policy.
-    pub fn is_auto_merge_eligible(
-        &self,
-        tier: Tier,
-        bump: &str,
-        checksums_verified: bool,
-    ) -> bool {
+    pub fn is_auto_merge_eligible(&self, tier: Tier, bump: &str, checksums_verified: bool) -> bool {
         let tier_ok = self.auto_merge_tiers.contains(&tier);
         let bump_ok = self.auto_merge_bump.iter().any(|b| b == bump);
         let checksum_ok = !self.auto_merge_requires_checksum || checksums_verified;
@@ -528,8 +527,8 @@ pub fn load_registry_meta(registry_dir: &Path) -> Result<RegistryMeta> {
     }
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let meta: RegistryMeta = toml::from_str(&content)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let meta: RegistryMeta =
+        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(meta)
 }
 
@@ -591,8 +590,14 @@ mod tests {
             crate_name: None,
             aqua: Some("cli/cli".to_string()),
             assets: HashMap::from([
-                ("macos-arm64".to_string(), "gh_{version}_macOS_arm64.zip".to_string()),
-                ("linux-x64".to_string(), "gh_{version}_linux_amd64.tar.gz".to_string()),
+                (
+                    "macos-arm64".to_string(),
+                    "gh_{version}_macOS_arm64.zip".to_string(),
+                ),
+                (
+                    "linux-x64".to_string(),
+                    "gh_{version}_linux_amd64.tar.gz".to_string(),
+                ),
             ]),
             checksum: Some(ChecksumConfig {
                 file: Some("gh_{version}_checksums.txt".to_string()),

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::config::{Config, Pin, Registry};
-use crate::tool::{load_registry_tools, ToolDef};
+use crate::tool::{ToolDef, load_registry_tools};
 
 /// A tool definition resolved to its source registry.
 #[derive(Debug, Clone)]
@@ -77,12 +77,8 @@ pub fn ensure_registry(config: &Config, reg: &Registry) -> Result<PathBuf> {
         // Remove the directory if it exists but isn't a valid git repo
         // (e.g. partial clone that was interrupted).
         if dest.exists() {
-            std::fs::remove_dir_all(&dest).with_context(|| {
-                format!(
-                    "failed to remove stale directory {}",
-                    dest.display()
-                )
-            })?;
+            std::fs::remove_dir_all(&dest)
+                .with_context(|| format!("failed to remove stale directory {}", dest.display()))?;
         }
         eprintln!("  cloning {}", reg.name);
         clone(&reg.url, &dest, &reg.branch)
@@ -205,11 +201,7 @@ pub fn apply_pins(
         } else if let Some(ref version) = pin.version {
             // Finding 15: validate pinned version before applying
             if !version_re.is_match(version) {
-                anyhow::bail!(
-                    "invalid pin version '{}' for '{}'",
-                    version,
-                    tool_name
-                );
+                anyhow::bail!("invalid pin version '{}' for '{}'", version, tool_name);
             }
             // Version-only pin: update in place.
             if let Some(existing) = resolved.iter_mut().find(|r| r.def.name == *tool_name) {
@@ -426,7 +418,11 @@ repo = "{repo}"
         let mut resolved = resolve_tools(&config).unwrap();
         // Before pin: gh comes from alpha at 2.89.0
         assert_eq!(
-            resolved.iter().find(|r| r.def.name == "gh").unwrap().registry,
+            resolved
+                .iter()
+                .find(|r| r.def.name == "gh")
+                .unwrap()
+                .registry,
             "alpha"
         );
 
@@ -513,12 +509,7 @@ repo = "{repo}"
         let mut resolved = resolve_tools(&config).unwrap();
         let result = apply_pins(&mut resolved, &config.pins, &config);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("unknown registry")
-        );
+        assert!(result.unwrap_err().to_string().contains("unknown registry"));
     }
 
     #[test]

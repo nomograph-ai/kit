@@ -282,7 +282,11 @@ impl ConfigContext {
             ConfigMode::Project { root } => Ok(root.join(".mise.toml")),
             ConfigMode::Global => {
                 let home = dirs::home_dir().context("could not determine home directory")?;
-                Ok(home.join(".config").join("mise").join("conf.d").join("kit.toml"))
+                Ok(home
+                    .join(".config")
+                    .join("mise")
+                    .join("conf.d")
+                    .join("kit.toml"))
             }
         }
     }
@@ -323,8 +327,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content =
-            toml::to_string_pretty(self).context("failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("failed to serialize config")?;
         std::fs::write(path, content)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
@@ -378,7 +381,12 @@ branch = "main"
 
         let ctx = ConfigContext::resolve_from(tmp.path()).unwrap();
         assert!(ctx.is_project());
-        assert_eq!(ctx.mode, ConfigMode::Project { root: tmp.path().to_path_buf() });
+        assert_eq!(
+            ctx.mode,
+            ConfigMode::Project {
+                root: tmp.path().to_path_buf()
+            }
+        );
         assert_eq!(ctx.config.registry.len(), 1);
         assert_eq!(ctx.config.registry[0].name, "test");
     }
@@ -393,7 +401,12 @@ branch = "main"
 
         let ctx = ConfigContext::resolve_from(&child).unwrap();
         assert!(ctx.is_project());
-        assert_eq!(ctx.mode, ConfigMode::Project { root: tmp.path().to_path_buf() });
+        assert_eq!(
+            ctx.mode,
+            ConfigMode::Project {
+                root: tmp.path().to_path_buf()
+            }
+        );
     }
 
     #[test]
@@ -405,7 +418,10 @@ branch = "main"
 
         assert_eq!(ctx.config_path().unwrap(), tmp.path().join("kit.toml"));
         assert_eq!(ctx.lockfile_path().unwrap(), tmp.path().join(".kit.lock"));
-        assert_eq!(ctx.mise_config_path().unwrap(), tmp.path().join(".mise.toml"));
+        assert_eq!(
+            ctx.mise_config_path().unwrap(),
+            tmp.path().join(".mise.toml")
+        );
     }
 
     #[test]
@@ -427,10 +443,18 @@ branch = "main"
             mode: ConfigMode::Global,
         };
         let lock_path = ctx.lockfile_path().unwrap();
-        assert!(lock_path.ends_with("kit/kit.lock"), "got: {}", lock_path.display());
+        assert!(
+            lock_path.ends_with("kit/kit.lock"),
+            "got: {}",
+            lock_path.display()
+        );
 
         let mise_path = ctx.mise_config_path().unwrap();
-        assert!(mise_path.ends_with("mise/conf.d/kit.toml"), "got: {}", mise_path.display());
+        assert!(
+            mise_path.ends_with("mise/conf.d/kit.toml"),
+            "got: {}",
+            mise_path.display()
+        );
     }
 
     #[test]
@@ -438,7 +462,8 @@ branch = "main"
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("kit.toml");
 
-        let config = Config::default_with_registry("round-trip", "https://gitlab.com/example/tools.git");
+        let config =
+            Config::default_with_registry("round-trip", "https://gitlab.com/example/tools.git");
         config.save_to(&path).unwrap();
 
         let loaded = Config::load_from(&path).unwrap();
@@ -450,7 +475,9 @@ branch = "main"
     fn mode_label_formatting() {
         let project_ctx = ConfigContext {
             config: Config::default_with_registry("t", "https://example.com/r.git"),
-            mode: ConfigMode::Project { root: PathBuf::from("/home/user/myproject") },
+            mode: ConfigMode::Project {
+                root: PathBuf::from("/home/user/myproject"),
+            },
         };
         assert_eq!(project_ctx.mode_label(), "project: /home/user/myproject");
 
