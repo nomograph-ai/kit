@@ -10,7 +10,7 @@
 //! Every value passes through toml_edit's API, which handles escaping.
 
 use anyhow::{Context, Result};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, value};
 
 use crate::config::Config;
 use crate::platform::Platform;
@@ -279,9 +279,7 @@ fn detect_conflicts(existing: &str, tools: &[ResolvedTool]) -> Result<Vec<MiseCo
     };
 
     // Try to parse as TOML to find user tool definitions
-    let doc: DocumentMut = user_content
-        .parse()
-        .unwrap_or_else(|_| DocumentMut::new());
+    let doc: DocumentMut = user_content.parse().unwrap_or_else(|_| DocumentMut::new());
 
     let user_tools = match doc.get("tools").and_then(|t| t.as_table()) {
         Some(t) => t,
@@ -378,20 +376,14 @@ fn classify(rt: &ResolvedTool) -> ToolEntry {
             version: def.version.clone(),
         },
         Source::Npm => {
-            let pkg = def
-                .package
-                .as_deref()
-                .unwrap_or(&def.name);
+            let pkg = def.package.as_deref().unwrap_or(&def.name);
             ToolEntry::Flat {
                 key: format!("npm:{pkg}"),
                 version: def.version.clone(),
             }
         }
         Source::Crates => {
-            let crate_name = def
-                .crate_name
-                .as_deref()
-                .unwrap_or(&def.name);
+            let crate_name = def.crate_name.as_deref().unwrap_or(&def.name);
             ToolEntry::Flat {
                 key: format!("cargo:{crate_name}"),
                 version: def.version.clone(),
@@ -462,7 +454,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, Settings};
     use crate::registry::ResolvedTool;
-    use crate::tool::{Source, ToolDef, Tier};
+    use crate::tool::{Source, Tier, ToolDef};
     use std::collections::HashMap;
 
     /// Minimal config for tests.
@@ -475,11 +467,7 @@ mod tests {
     }
 
     /// Helper: build a ToolDef with common defaults, overriding specific fields.
-    fn make_tool(
-        name: &str,
-        source: Source,
-        version: &str,
-    ) -> ToolDef {
+    fn make_tool(name: &str, source: Source, version: &str) -> ToolDef {
         ToolDef {
             name: name.to_string(),
             description: None,
@@ -517,10 +505,19 @@ mod tests {
         let output = generate(&tools, &test_config()).unwrap();
 
         // Should produce: gh = "2.89.0"
-        assert!(output.contains("gh = \"2.89.0\""), "expected flat aqua entry, got:\n{output}");
+        assert!(
+            output.contains("gh = \"2.89.0\""),
+            "expected flat aqua entry, got:\n{output}"
+        );
         // Should NOT contain http: or github:
-        assert!(!output.contains("http:gh"), "should not use http backend for aqua tool");
-        assert!(!output.contains("github:"), "should not use github: prefix for aqua tool");
+        assert!(
+            !output.contains("http:gh"),
+            "should not use http backend for aqua tool"
+        );
+        assert!(
+            !output.contains("github:"),
+            "should not use github: prefix for aqua tool"
+        );
     }
 
     #[test]
@@ -639,8 +636,14 @@ mod tests {
         def.repo = Some("some-org/some-tool".to_string());
         def.bin = Some("some-gl-tool".to_string());
         def.assets = HashMap::from([
-            ("macos-arm64".to_string(), "some-gl-tool-darwin-arm64".to_string()),
-            ("linux-x64".to_string(), "some-gl-tool-linux-amd64".to_string()),
+            (
+                "macos-arm64".to_string(),
+                "some-gl-tool-darwin-arm64".to_string(),
+            ),
+            (
+                "linux-x64".to_string(),
+                "some-gl-tool-linux-amd64".to_string(),
+            ),
         ]);
 
         let tools = vec![resolved(def)];
@@ -655,10 +658,7 @@ mod tests {
     #[test]
     fn settings_trusted_config_paths_from_config() {
         let mut config = test_config();
-        config.settings.trusted_config_paths = vec![
-            "~/projects".to_string(),
-            "~/work".to_string(),
-        ];
+        config.settings.trusted_config_paths = vec!["~/projects".to_string(), "~/work".to_string()];
 
         let output = generate(&[], &config).unwrap();
 
@@ -765,7 +765,9 @@ mod tests {
         let output = generate(&tools, &test_config()).unwrap();
 
         // Flat entries should appear before subtable headers
-        let flat_pos = output.find("gh = \"2.89.0\"").expect("should contain gh flat entry");
+        let flat_pos = output
+            .find("gh = \"2.89.0\"")
+            .expect("should contain gh flat entry");
         let subtable_pos = output
             .find("[tools.\"http:muxr\"]")
             .expect("should contain http:muxr subtable");
@@ -1023,9 +1025,18 @@ linux-x64 = "dolt-linux-amd64"
         let tools = vec![resolved(def)];
         let result = merge_into(&tools, None, "nomograph/kits").unwrap();
 
-        assert!(result.content.contains("[tools]"), "should have [tools] section");
-        assert!(result.content.contains("# kit:begin (nomograph/kits)"), "should have begin marker");
-        assert!(result.content.contains("# kit:end"), "should have end marker");
+        assert!(
+            result.content.contains("[tools]"),
+            "should have [tools] section"
+        );
+        assert!(
+            result.content.contains("# kit:begin (nomograph/kits)"),
+            "should have begin marker"
+        );
+        assert!(
+            result.content.contains("# kit:end"),
+            "should have end marker"
+        );
         assert!(result.content.contains("gh"), "should have gh tool");
         assert!(result.conflicts.is_empty(), "no conflicts on fresh file");
     }
@@ -1043,8 +1054,14 @@ python = "3.12"
         let tools = vec![resolved(def)];
         let result = merge_into(&tools, Some(existing), "nomograph/kits").unwrap();
 
-        assert!(result.content.contains("node = \"20.0.0\""), "user node preserved");
-        assert!(result.content.contains("python = \"3.12\""), "user python preserved");
+        assert!(
+            result.content.contains("node = \"20.0.0\""),
+            "user node preserved"
+        );
+        assert!(
+            result.content.contains("python = \"3.12\""),
+            "user python preserved"
+        );
         assert!(result.content.contains("# kit:begin"), "markers added");
         assert!(result.content.contains("gh"), "kit tool added");
     }
@@ -1065,9 +1082,15 @@ gh = "2.88.0"
         let tools = vec![resolved(def)];
         let result = merge_into(&tools, Some(existing), "nomograph/kits").unwrap();
 
-        assert!(result.content.contains("node = \"20.0.0\""), "user tools preserved");
+        assert!(
+            result.content.contains("node = \"20.0.0\""),
+            "user tools preserved"
+        );
         assert!(!result.content.contains("2.88.0"), "old kit version gone");
-        assert!(result.content.contains("# kit:begin (nomograph/kits)"), "new marker");
+        assert!(
+            result.content.contains("# kit:begin (nomograph/kits)"),
+            "new marker"
+        );
     }
 
     #[test]
@@ -1100,7 +1123,10 @@ gh = "2.89.0"
         let tools = vec![resolved(def)];
         let result = merge_into(&tools, Some(existing), "nomograph/kits").unwrap();
 
-        assert!(result.conflicts.is_empty(), "same version should not conflict");
+        assert!(
+            result.conflicts.is_empty(),
+            "same version should not conflict"
+        );
     }
 
     #[test]
@@ -1126,7 +1152,10 @@ FOO = "bar"
         let result = merge_into(&tools, Some(existing), "test").unwrap();
 
         assert!(result.content.contains("[env]"), "env section preserved");
-        assert!(result.content.contains("FOO = \"bar\""), "env var preserved");
+        assert!(
+            result.content.contains("FOO = \"bar\""),
+            "env var preserved"
+        );
         assert!(result.content.contains("[tools]"), "tools section added");
         assert!(result.content.contains("# kit:begin"), "markers added");
     }

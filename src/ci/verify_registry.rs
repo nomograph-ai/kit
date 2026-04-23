@@ -25,7 +25,10 @@ const PLATFORMS: [Platform; 2] = [Platform::MacosArm64, Platform::LinuxX64];
 /// Returns `Ok(())` if all tools are valid. Returns `Err` if any tool
 /// fails validation or checksum verification.
 pub fn verify_registry(registry_dir: &Path, output: Option<&Path>) -> Result<()> {
-    eprintln!("kit verify-registry: validating {}\n", registry_dir.display());
+    eprintln!(
+        "kit verify-registry: validating {}\n",
+        registry_dir.display()
+    );
 
     // Verify _meta.toml exists and parses
     match tool::load_registry_meta(registry_dir) {
@@ -139,8 +142,8 @@ pub fn verify_registry(registry_dir: &Path, output: Option<&Path>) -> Result<()>
     };
 
     if let Some(out_path) = output {
-        let json = serde_json::to_string_pretty(&result)
-            .context("failed to serialize verify output")?;
+        let json =
+            serde_json::to_string_pretty(&result).context("failed to serialize verify output")?;
         std::fs::write(out_path, &json)
             .with_context(|| format!("failed to write {}", out_path.display()))?;
     }
@@ -150,9 +153,7 @@ pub fn verify_registry(registry_dir: &Path, output: Option<&Path>) -> Result<()>
     eprintln!("Invalid: {invalid_count}");
 
     if invalid_count > 0 {
-        anyhow::bail!(
-            "{invalid_count} tool(s) failed validation -- MR should not merge"
-        );
+        anyhow::bail!("{invalid_count} tool(s) failed validation -- MR should not merge");
     }
 
     Ok(())
@@ -262,7 +263,7 @@ mod tests {
     #[test]
     fn verify_no_checksums_returns_false() {
         let def = make_valid_tool();
-        assert_eq!(verify_tool_checksums(&def).unwrap(), false);
+        assert!(!verify_tool_checksums(&def).unwrap());
     }
 
     #[test]
@@ -272,16 +273,14 @@ mod tests {
             "macos-arm64".to_string(),
             "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string(),
         );
-        assert_eq!(verify_tool_checksums(&def).unwrap(), true);
+        assert!(verify_tool_checksums(&def).unwrap());
     }
 
     #[test]
     fn verify_invalid_inline_checksum_fails() {
         let mut def = make_valid_tool();
-        def.checksums.insert(
-            "macos-arm64".to_string(),
-            "too-short".to_string(),
-        );
+        def.checksums
+            .insert("macos-arm64".to_string(), "too-short".to_string());
         assert!(verify_tool_checksums(&def).is_err());
     }
 }

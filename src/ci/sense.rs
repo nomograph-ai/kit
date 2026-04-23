@@ -17,9 +17,7 @@ use anyhow::{Context, Result};
 
 use crate::tool;
 
-use super::{
-    Advisory, BumpLevel, CheckOutput, FindingType, Risk, SenseFinding, SenseReport,
-};
+use super::{Advisory, BumpLevel, CheckOutput, FindingType, Risk, SenseFinding, SenseReport};
 
 /// Classify a version bump as patch, minor, or major.
 pub(crate) fn classify_bump(current: &str, new: &str) -> BumpLevel {
@@ -106,11 +104,8 @@ pub fn sense(registry_dir: &Path, output: &Path) -> Result<()> {
         let bump = classify_bump(&update.current_version, &update.new_version);
 
         // All platforms verified = checksums verified
-        let checksums_verified = !update.verified.is_empty()
-            && update
-                .verified
-                .values()
-                .all(|v| *v == Some(true));
+        let checksums_verified =
+            !update.verified.is_empty() && update.verified.values().all(|v| *v == Some(true));
 
         let tool_advisories: Vec<Advisory> = check_data
             .advisories
@@ -198,8 +193,8 @@ pub fn sense(registry_dir: &Path, output: &Path) -> Result<()> {
         infrastructure_errors: infrastructure_errors.clone(),
     };
 
-    let json = serde_json::to_string_pretty(&report)
-        .context("failed to serialize sense-report.json")?;
+    let json =
+        serde_json::to_string_pretty(&report).context("failed to serialize sense-report.json")?;
     std::fs::write(output, &json)
         .with_context(|| format!("failed to write {}", output.display()))?;
 

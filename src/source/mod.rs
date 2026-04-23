@@ -18,15 +18,13 @@ use crate::tool::ChecksumFormat;
 /// Repo paths: owner/repo with safe characters. Matches tool.rs REPO_PATTERN.
 const REPO_PATTERN: &str = r"^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$";
 
-static REPO_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(REPO_PATTERN).unwrap());
+static REPO_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(REPO_PATTERN).unwrap());
 
 /// npm package names: scoped (@scope/name) or unscoped (name).
 /// Lowercase, digits, hyphens, dots, underscores.
 const NPM_PATTERN: &str = r"^(@[a-z0-9._\-]+/)?[a-z0-9._\-]+$";
 
-static NPM_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(NPM_PATTERN).unwrap());
+static NPM_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(NPM_PATTERN).unwrap());
 
 /// Subprocess timeout for upstream queries.
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(120);
@@ -46,8 +44,9 @@ static X64_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)(amd64|x86_64)").unwrap());
 
 /// Filename suffixes that are verification artifacts, not installable assets.
-static SKIP_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\.(sha256|sha512|sig|asc|pem|cert|bundle|sbom)(\..*)?$").unwrap());
+static SKIP_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\.(sha256|sha512|sig|asc|pem|cert|bundle|sbom)(\..*)?$").unwrap()
+});
 
 /// Patterns that indicate a checksum manifest file.
 static CHECKSUM_RE: LazyLock<regex::Regex> =
@@ -214,9 +213,7 @@ pub fn query_gitlab(repo: &str) -> Result<UpstreamInfo> {
 /// npm packages have no binary assets -- only version is returned.
 pub fn query_npm(package: &str) -> Result<UpstreamInfo> {
     if !NPM_RE.is_match(package) {
-        anyhow::bail!(
-            "invalid npm package name '{package}': must match {NPM_PATTERN}"
-        );
+        anyhow::bail!("invalid npm package name '{package}': must match {NPM_PATTERN}");
     }
 
     let output = run_command("npm", &["view", package, "version"])
@@ -230,9 +227,7 @@ pub fn query_npm(package: &str) -> Result<UpstreamInfo> {
     // Validate the version looks reasonable.
     let version_re = regex::Regex::new(crate::tool::VERSION_PATTERN).unwrap();
     if !version_re.is_match(&version) {
-        anyhow::bail!(
-            "npm returned invalid version '{version}' for '{package}'"
-        );
+        anyhow::bail!("npm returned invalid version '{version}' for '{package}'");
     }
 
     Ok(UpstreamInfo {
@@ -261,9 +256,7 @@ static CRATE_RE: LazyLock<regex::Regex> =
 /// Crates.io packages have no binary assets -- cargo handles installation.
 pub fn query_crates(crate_name: &str) -> Result<UpstreamInfo> {
     if !CRATE_RE.is_match(crate_name) {
-        anyhow::bail!(
-            "invalid crate name '{crate_name}': must match {CRATE_PATTERN}"
-        );
+        anyhow::bail!("invalid crate name '{crate_name}': must match {CRATE_PATTERN}");
     }
 
     let output = run_command("cargo", &["search", crate_name, "--limit", "1"])
@@ -295,9 +288,7 @@ pub fn query_crates(crate_name: &str) -> Result<UpstreamInfo> {
 
     let version_re = regex::Regex::new(crate::tool::VERSION_PATTERN).unwrap();
     if !version_re.is_match(&version) {
-        anyhow::bail!(
-            "cargo search returned invalid version '{version}' for '{crate_name}'"
-        );
+        anyhow::bail!("cargo search returned invalid version '{version}' for '{crate_name}'");
     }
 
     Ok(UpstreamInfo {
@@ -316,9 +307,7 @@ pub fn query_crates(crate_name: &str) -> Result<UpstreamInfo> {
 /// Validate a repo string against the safe pattern.
 fn validate_repo(repo: &str) -> Result<()> {
     if !REPO_RE.is_match(repo) {
-        anyhow::bail!(
-            "invalid repo '{repo}': must be owner/repo matching {REPO_PATTERN}"
-        );
+        anyhow::bail!("invalid repo '{repo}': must be owner/repo matching {REPO_PATTERN}");
     }
     Ok(())
 }
@@ -347,7 +336,12 @@ fn run_command(program: &str, args: &[&str]) -> Result<String> {
 
     let output = rx
         .recv_timeout(SUBPROCESS_TIMEOUT)
-        .map_err(|_| anyhow::anyhow!("{program} timed out after {}s", SUBPROCESS_TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{program} timed out after {}s",
+                SUBPROCESS_TIMEOUT.as_secs()
+            )
+        })?
         .with_context(|| format!("{program} failed to complete"))?;
 
     // Clean up the thread (it should already be done if recv succeeded).
@@ -355,15 +349,10 @@ fn run_command(program: &str, args: &[&str]) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "{program} exited with {}: {}",
-            output.status,
-            stderr.trim()
-        );
+        anyhow::bail!("{program} exited with {}: {}", output.status, stderr.trim());
     }
 
-    String::from_utf8(output.stdout)
-        .context("subprocess output is not valid UTF-8")
+    String::from_utf8(output.stdout).context("subprocess output is not valid UTF-8")
 }
 
 /// Split a git tag into (prefix, version).
@@ -582,10 +571,7 @@ mod tests {
             assets.get("linux-x64"),
             Some(&"gh_2.89.0_linux_amd64.tar.gz".to_string())
         );
-        assert_eq!(
-            checksum,
-            Some("gh_2.89.0_checksums.txt".to_string())
-        );
+        assert_eq!(checksum, Some("gh_2.89.0_checksums.txt".to_string()));
     }
 
     #[test]
