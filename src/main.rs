@@ -1,3 +1,5 @@
+#![deny(warnings, clippy::all)]
+
 mod ci;
 mod config;
 mod lockfile;
@@ -202,6 +204,14 @@ enum Commands {
         tool: Option<String>,
     },
 
+    /// Emit the skill file: concepts, lifecycle, critical rules, when-to-use
+    ///
+    /// Print a self-documenting reference to stdout. Designed to be piped
+    /// into an agent's skill listing so LLMs have operating context
+    /// (especially: tier discipline, signature verification stays on,
+    /// registry push is authoritative) before touching kit.
+    Skill,
+
     /// Generate shell completions
     #[command(hide = true)]
     Completions {
@@ -247,7 +257,12 @@ fn main() -> Result<()> {
         Commands::VerifyRegistry { registry, output } => {
             cmd_verify_registry(registry.as_deref(), output.as_deref())
         }
-        Commands::Init { registry, ci, name, url } => {
+        Commands::Init {
+            registry,
+            ci,
+            name,
+            url,
+        } => {
             if registry {
                 cmd_init_registry(ci, &name)
             } else {
@@ -255,6 +270,10 @@ fn main() -> Result<()> {
             }
         }
         Commands::Upgrade { yes, tool } => cmd_upgrade(yes, tool.as_deref()),
+        Commands::Skill => {
+            print!("{}", include_str!("../resources/skill.md"));
+            Ok(())
+        }
         Commands::Completions { shell } => cmd_completions(shell),
         Commands::ManPage => cmd_man_page(),
     }
@@ -328,14 +347,9 @@ fn cmd_diff() -> Result<()> {
     );
     for change in &changes {
         match change {
-            lockfile::Change::Updated {
-                name, from, to, ..
-            } => {
+            lockfile::Change::Updated { name, from, to, .. } => {
                 let bump = detect_bump(from, to);
-                eprintln!(
-                    "  {:<20} {:<12} {:<12} {} bump",
-                    name, from, to, bump
-                );
+                eprintln!("  {:<20} {:<12} {:<12} {} bump", name, from, to, bump);
                 changed_count += 1;
             }
             lockfile::Change::Added { name } => {
@@ -345,30 +359,16 @@ fn cmd_diff() -> Result<()> {
                     .find(|rt| rt.def.name == *name)
                     .map(|rt| rt.def.version.as_str())
                     .unwrap_or("?");
-                eprintln!(
-                    "  {:<20} {:<12} {:<12} new",
-                    name, "--", version
-                );
+                eprintln!("  {:<20} {:<12} {:<12} new", name, "--", version);
                 changed_count += 1;
             }
             lockfile::Change::Removed { name } => {
-                let version = lock
-                    .get(name)
-                    .map(|e| e.version.as_str())
-                    .unwrap_or("?");
-                eprintln!(
-                    "  {:<20} {:<12} {:<12} removed",
-                    name, version, "--"
-                );
+                let version = lock.get(name).map(|e| e.version.as_str()).unwrap_or("?");
+                eprintln!("  {:<20} {:<12} {:<12} removed", name, version, "--");
                 changed_count += 1;
             }
-            lockfile::Change::RegistryMoved {
-                name, from, to, ..
-            } => {
-                let version = lock
-                    .get(name)
-                    .map(|e| e.version.as_str())
-                    .unwrap_or("?");
+            lockfile::Change::RegistryMoved { name, from, to, .. } => {
+                let version = lock.get(name).map(|e| e.version.as_str()).unwrap_or("?");
                 eprintln!(
                     "  {:<20} {:<12} {:<12} registry: {} -> {}",
                     name, version, version, from, to
@@ -412,7 +412,10 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
         }
     }
 
-    eprintln!("kit upgrade: checking {} tools for updates\n", resolved.len());
+    eprintln!(
+        "kit upgrade: checking {} tools for updates\n",
+        resolved.len()
+    );
 
     struct UpgradeCandidate {
         name: String,
@@ -478,10 +481,7 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
                     eprintln!("{:<12} up to date", rt.def.version);
                 } else {
                     let bump = detect_bump(&rt.def.version, &info.version);
-                    eprintln!(
-                        "{:<12} -> {:<12} ({})",
-                        rt.def.version, info.version, bump
-                    );
+                    eprintln!("{:<12} -> {:<12} ({})", rt.def.version, info.version, bump);
                     let registry_dir = config.registry_dir()?.join(&rt.registry);
                     candidates.push(UpgradeCandidate {
                         name: rt.def.name.clone(),
@@ -534,7 +534,10 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
 
     // Apply updates to TOML files
     for c in &candidates {
-        let tool_path = c.registry_dir.join("tools").join(format!("{}.toml", c.name));
+        let tool_path = c
+            .registry_dir
+            .join("tools")
+            .join(format!("{}.toml", c.name));
         if !tool_path.exists() {
             eprintln!("  warning: {}.toml not found, skipping", c.name);
             continue;
@@ -707,13 +710,13 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         std::collections::HashMap::new();
     let tools_with_checksums: Vec<&registry::ResolvedTool> = resolved
         .iter()
-        .filter(|rt| {
-            rt.def.checksums.contains_key(platform.key())
-                || rt.def.checksum.is_some()
-        })
+        .filter(|rt| rt.def.checksums.contains_key(platform.key()) || rt.def.checksum.is_some())
         .collect();
     if !tools_with_checksums.is_empty() {
-        eprintln!("  resolving checksums for {} tools...", tools_with_checksums.len());
+        eprintln!(
+            "  resolving checksums for {} tools...",
+            tools_with_checksums.len()
+        );
     }
     for rt in &tools_with_checksums {
         // Inline checksums are immediate; checksum files require HTTP.
@@ -754,11 +757,7 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         let sha = registry_checksums
             .get(&rt.def.name)
             .and_then(|opt| opt.as_deref());
-        let result = old_lock.check_integrity(
-            &rt.def.name,
-            &rt.def.version,
-            sha,
-        );
+        let result = old_lock.check_integrity(&rt.def.name, &rt.def.version, sha);
         if result == lockfile::IntegrityResult::ChecksumChanged {
             anyhow::bail!(
                 "SUPPLY CHAIN ALERT: {} has same version but different checksum. \
@@ -771,7 +770,13 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     // Build the new-resolved tuples for diff
     let new_tuples: Vec<(String, String, String)> = resolved
         .iter()
-        .map(|rt| (rt.def.name.clone(), rt.def.version.clone(), rt.registry.clone()))
+        .map(|rt| {
+            (
+                rt.def.name.clone(),
+                rt.def.version.clone(),
+                rt.registry.clone(),
+            )
+        })
         .collect();
     let changes = lockfile::diff(&old_lock, &new_tuples);
 
@@ -840,13 +845,15 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
             .first()
             .map(|r| r.name.as_str())
             .unwrap_or("kit");
-        let merge_result =
-            mise::merge_into(&resolved, existing.as_deref(), registry_label)?;
+        let merge_result = mise::merge_into(&resolved, existing.as_deref(), registry_label)?;
 
         if !merge_result.conflicts.is_empty() {
             eprintln!("\n  Conflicts (user tool vs kit):");
             for c in &merge_result.conflicts {
-                eprintln!("    {}: user={}, kit={}", c.tool, c.user_version, c.kit_version);
+                eprintln!(
+                    "    {}: user={}, kit={}",
+                    c.tool, c.user_version, c.kit_version
+                );
             }
             if !auto_yes {
                 eprintln!("  Kit tools will be added alongside user tools.");
@@ -902,7 +909,9 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     // F12: warn clearly if mise failed -- lockfile will still be updated
     // but the `installed` field will reflect the failure.
     if !mise_ok {
-        eprintln!("  warning: lockfile updated but mise install failed -- tools may not be installed");
+        eprintln!(
+            "  warning: lockfile updated but mise install failed -- tools may not be installed"
+        );
     }
 
     // 7. Update lockfile
@@ -935,7 +944,11 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
             lockfile::new_entry(
                 &rt.def.version,
                 &rt.registry,
-                if url.is_empty() { None } else { Some(url.as_str()) },
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url.as_str())
+                },
                 registry_sha,
                 binary_sha.as_deref(),
                 method,
@@ -985,8 +998,11 @@ fn cmd_status() -> Result<()> {
 
         println!(
             "  {:<20} {:<12} {:<10} {:<10} {:<10} {verify_method}{pinned}",
-            rt.def.name, rt.def.version, status,
-            format!("kit({})", rt.registry), rt.def.tier
+            rt.def.name,
+            rt.def.version,
+            status,
+            format!("kit({})", rt.registry),
+            rt.def.tier
         );
     }
 
@@ -1093,13 +1109,28 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bo
     }
 
     let (source_type, repo, pkg, crate_name) = if crates {
-        (tool::Source::Crates, None, None, source.map(|s| s.to_string()))
+        (
+            tool::Source::Crates,
+            None,
+            None,
+            source.map(|s| s.to_string()),
+        )
     } else if npm {
         (tool::Source::Npm, None, source.map(|s| s.to_string()), None)
     } else if gitlab {
-        (tool::Source::Gitlab, source.map(|s| s.to_string()), None, None)
+        (
+            tool::Source::Gitlab,
+            source.map(|s| s.to_string()),
+            None,
+            None,
+        )
     } else {
-        (tool::Source::Github, source.map(|s| s.to_string()), None, None)
+        (
+            tool::Source::Github,
+            source.map(|s| s.to_string()),
+            None,
+            None,
+        )
     };
 
     // Query upstream for version, assets, and checksum info.
@@ -1475,7 +1506,10 @@ fn cmd_audit() -> Result<()> {
     let mut resolved = registry::resolve_tools(config)?;
     registry::apply_pins(&mut resolved, &config.pins, config)?;
 
-    eprintln!("kit audit: checking {} tools for security advisories\n", resolved.len());
+    eprintln!(
+        "kit audit: checking {} tools for security advisories\n",
+        resolved.len()
+    );
 
     let mut findings: Vec<(String, String, ci::Advisory)> = Vec::new();
 
@@ -1597,9 +1631,7 @@ fn audit_npm(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
     let output = std::process::Command::new("gh")
         .args([
             "api",
-            &format!(
-                "/advisories?ecosystem=npm&package={pkg}&affects={version}"
-            ),
+            &format!("/advisories?ecosystem=npm&package={pkg}&affects={version}"),
         ])
         .output()
         .context("failed to execute gh")?;
@@ -1637,8 +1669,7 @@ fn audit_npm(def: &tool::ToolDef) -> Result<Vec<ci::Advisory>> {
 
 fn cmd_pin(name: &str, version: Option<&str>, registry: Option<&str>) -> Result<()> {
     if let Some(v) = version {
-        tool::validate_version(v)
-            .with_context(|| format!("invalid pin version for '{name}'"))?;
+        tool::validate_version(v).with_context(|| format!("invalid pin version for '{name}'"))?;
     }
 
     let mut ctx = config::ConfigContext::resolve()?;
@@ -1789,8 +1820,9 @@ fn cmd_init_registry(ci: bool, name: &str) -> Result<()> {
 
 fn resolve_platform(config: &config::Config) -> Result<platform::Platform> {
     match &config.settings.platform {
-        Some(p) => platform::Platform::from_key(p)
-            .ok_or_else(|| anyhow::anyhow!("unknown platform: {p}")),
+        Some(p) => {
+            platform::Platform::from_key(p).ok_or_else(|| anyhow::anyhow!("unknown platform: {p}"))
+        }
         None => platform::Platform::detect(),
     }
 }

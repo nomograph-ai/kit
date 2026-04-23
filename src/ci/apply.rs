@@ -128,11 +128,7 @@ pub fn apply(input: &Path, output: &Path) -> Result<()> {
         }
 
         let bump = classify_bump(old_version, new_version);
-        let checksums_verified = update
-            .candidate
-            .verified
-            .values()
-            .all(|v| *v == Some(true))
+        let checksums_verified = update.candidate.verified.values().all(|v| *v == Some(true))
             && !update.candidate.verified.is_empty();
 
         applied.push(AppliedUpdate {
@@ -245,7 +241,10 @@ fn build_commit_message(today: &str, applied: &[AppliedUpdate]) -> String {
     let mut lines = vec![format!("kit: tool updates {today}")];
     lines.push(String::new());
     for u in applied {
-        lines.push(format!("- {}: {} -> {}", u.name, u.old_version, u.new_version));
+        lines.push(format!(
+            "- {}: {} -> {}",
+            u.name, u.old_version, u.new_version
+        ));
     }
     lines.push(String::new());
     lines.push("AI-Assisted: yes".to_string());
@@ -341,18 +340,13 @@ fn update_tool_toml(
     // Filter to only platforms that have a computed hash (Some).
     let new_hashes: Vec<_> = checksums
         .iter()
-        .filter_map(|(platform, sha)| {
-            sha.as_ref().map(|hash| (platform.as_str(), hash.as_str()))
-        })
+        .filter_map(|(platform, sha)| sha.as_ref().map(|hash| (platform.as_str(), hash.as_str())))
         .collect();
 
     if !new_hashes.is_empty() {
         // Create the [tool.checksums] table if it doesn't exist yet.
         if tool_table.get("checksums").is_none() {
-            tool_table.insert(
-                "checksums",
-                toml_edit::Item::Table(toml_edit::Table::new()),
-            );
+            tool_table.insert("checksums", toml_edit::Item::Table(toml_edit::Table::new()));
         }
 
         if let Some(checksums_table) = tool_table
@@ -386,17 +380,26 @@ linux-x64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         let checksums = HashMap::from([
             (
                 "macos-arm64".to_string(),
-                Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string()),
+                Some(
+                    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+                ),
             ),
             (
                 "linux-x64".to_string(),
-                Some("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string()),
+                Some(
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+                ),
             ),
         ]);
 
-        let result = update_tool_toml(input, "0.7.0", &checksums).unwrap().unwrap();
+        let result = update_tool_toml(input, "0.7.0", &checksums)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.contains("version = \"0.7.0\""), "version should be updated");
+        assert!(
+            result.contains("version = \"0.7.0\""),
+            "version should be updated"
+        );
         assert!(
             result.contains("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
             "macos checksum should be updated"
@@ -420,9 +423,14 @@ source = "gitlab"
             Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()),
         )]);
 
-        let result = update_tool_toml(input, "0.7.0", &checksums).unwrap().unwrap();
+        let result = update_tool_toml(input, "0.7.0", &checksums)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.contains("version = \"0.7.0\""), "version should be updated");
+        assert!(
+            result.contains("version = \"0.7.0\""),
+            "version should be updated"
+        );
         assert!(
             result.contains("[tool.checksums]"),
             "checksums table should be created"
@@ -443,9 +451,14 @@ source = "npm"
 
         let checksums = HashMap::new();
 
-        let result = update_tool_toml(input, "1.1.0", &checksums).unwrap().unwrap();
+        let result = update_tool_toml(input, "1.1.0", &checksums)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.contains("version = \"1.1.0\""), "version should be updated");
+        assert!(
+            result.contains("version = \"1.1.0\""),
+            "version should be updated"
+        );
         assert!(
             !result.contains("checksums"),
             "no checksums table should be created when map is empty"
@@ -465,9 +478,14 @@ version = "1.0.0"
             ("linux-x64".to_string(), None),
         ]);
 
-        let result = update_tool_toml(input, "1.1.0", &checksums).unwrap().unwrap();
+        let result = update_tool_toml(input, "1.1.0", &checksums)
+            .unwrap()
+            .unwrap();
 
-        assert!(result.contains("version = \"1.1.0\""), "version should be updated");
+        assert!(
+            result.contains("version = \"1.1.0\""),
+            "version should be updated"
+        );
         assert!(
             !result.contains("checksums"),
             "no checksums table when all values are None"
@@ -518,16 +536,15 @@ key = "value"
             make_update("rune", "own", "minor", true),
         ];
 
-        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
-            updates.into_iter().partition(|u| {
-                let tier = match u.tier.as_str() {
-                    "own" => Tier::Own,
-                    "high" => Tier::High,
-                    _ => Tier::Low,
-                };
-                u.evaluation != "flag"
-                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
-            });
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) = updates.into_iter().partition(|u| {
+            let tier = match u.tier.as_str() {
+                "own" => Tier::Own,
+                "high" => Tier::High,
+                _ => Tier::Low,
+            };
+            u.evaluation != "flag"
+                && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+        });
 
         assert_eq!(auto_eligible.len(), 2, "uv and yq should auto-merge");
         assert_eq!(review_needed.len(), 2, "glab and rune need review");
@@ -552,16 +569,15 @@ key = "value"
             make_update("glow", "low", "patch", true),
         ];
 
-        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
-            updates.into_iter().partition(|u| {
-                let tier = match u.tier.as_str() {
-                    "own" => Tier::Own,
-                    "high" => Tier::High,
-                    _ => Tier::Low,
-                };
-                u.evaluation != "flag"
-                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
-            });
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) = updates.into_iter().partition(|u| {
+            let tier = match u.tier.as_str() {
+                "own" => Tier::Own,
+                "high" => Tier::High,
+                _ => Tier::Low,
+            };
+            u.evaluation != "flag"
+                && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+        });
 
         assert_eq!(auto_eligible.len(), 3);
         assert!(review_needed.is_empty());
@@ -582,16 +598,15 @@ key = "value"
             make_update("dolt", "low", "patch", false), // no checksums
         ];
 
-        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
-            updates.into_iter().partition(|u| {
-                let tier = match u.tier.as_str() {
-                    "own" => Tier::Own,
-                    "high" => Tier::High,
-                    _ => Tier::Low,
-                };
-                u.evaluation != "flag"
-                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
-            });
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) = updates.into_iter().partition(|u| {
+            let tier = match u.tier.as_str() {
+                "own" => Tier::Own,
+                "high" => Tier::High,
+                _ => Tier::Low,
+            };
+            u.evaluation != "flag"
+                && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+        });
 
         assert_eq!(auto_eligible.len(), 1, "uv should auto-merge");
         assert_eq!(auto_eligible[0].name, "uv");
@@ -614,16 +629,15 @@ key = "value"
 
         let updates = vec![make_update("uv", "low", "patch", true), flagged];
 
-        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) =
-            updates.into_iter().partition(|u| {
-                let tier = match u.tier.as_str() {
-                    "own" => Tier::Own,
-                    "high" => Tier::High,
-                    _ => Tier::Low,
-                };
-                u.evaluation != "flag"
-                    && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
-            });
+        let (auto_eligible, review_needed): (Vec<_>, Vec<_>) = updates.into_iter().partition(|u| {
+            let tier = match u.tier.as_str() {
+                "own" => Tier::Own,
+                "high" => Tier::High,
+                _ => Tier::Low,
+            };
+            u.evaluation != "flag"
+                && policy.is_auto_merge_eligible(tier, &u.bump, u.checksums_verified)
+        });
 
         assert_eq!(auto_eligible.len(), 1);
         assert_eq!(review_needed.len(), 1);
@@ -651,10 +665,15 @@ macos-arm64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string()),
         )]);
 
-        let result = update_tool_toml(input, "2.90.0", &checksums).unwrap().unwrap();
+        let result = update_tool_toml(input, "2.90.0", &checksums)
+            .unwrap()
+            .unwrap();
 
         assert!(result.contains("name = \"gh\""), "name preserved");
-        assert!(result.contains("description = \"GitHub CLI\""), "description preserved");
+        assert!(
+            result.contains("description = \"GitHub CLI\""),
+            "description preserved"
+        );
         assert!(result.contains("source = \"github\""), "source preserved");
         assert!(result.contains("repo = \"cli/cli\""), "repo preserved");
         assert!(result.contains("tier = \"high\""), "tier preserved");

@@ -47,9 +47,15 @@ mod tests {
 
     #[test]
     fn platform_key_roundtrip() {
-        assert_eq!(Platform::from_key("macos-arm64"), Some(Platform::MacosArm64));
+        assert_eq!(
+            Platform::from_key("macos-arm64"),
+            Some(Platform::MacosArm64)
+        );
         assert_eq!(Platform::from_key("linux-x64"), Some(Platform::LinuxX64));
-        assert_eq!(Platform::from_key("darwin-arm64"), Some(Platform::MacosArm64));
+        assert_eq!(
+            Platform::from_key("darwin-arm64"),
+            Some(Platform::MacosArm64)
+        );
         assert_eq!(Platform::from_key("linux-amd64"), Some(Platform::LinuxX64));
         assert_eq!(Platform::from_key("windows-x64"), None);
     }
