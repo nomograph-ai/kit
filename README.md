@@ -7,13 +7,14 @@
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)](https://gitlab.com/nomograph/kit)
 
-Verified tool registry manager -- manages developer toolchains from
-git-based registries.
+Tool registry manager -- manages developer toolchains from git-based
+registries, layered on top of [mise](https://mise.jdx.dev).
 
-kit resolves tool versions across multiple registries, generates
-[mise](https://mise.jdx.dev) configuration, verifies checksums and
-cosign signatures, and automates upstream update tracking via a
-three-pipeline CI architecture.
+kit resolves tool versions across multiple registries, generates mise
+configuration, verifies SHA-256 checksums against publisher release
+artifacts, verifies cosign signatures where publishers sign bare
+binaries, and automates upstream update tracking via a three-pipeline
+CI architecture.
 
 ## Bootstrap
 
@@ -54,7 +55,7 @@ kit status
 | `kit status` | Installed vs registry, drift detection, verification strength |
 | `kit diff` | Show changes between lockfile and registry |
 | `kit upgrade` | Interactive tool update workflow |
-| `kit verify` | Re-verify all installed binaries (cosign + checksums) |
+| `kit verify` | Re-verify all installed binaries (checksums always; cosign only for bare-binary assets) |
 | `kit audit` | Check tools for known security advisories |
 | `kit add <name> <source>` | Query upstream, generate tool definition |
 | `kit push <name>` | Commit and push a tool definition |
@@ -212,19 +213,21 @@ re-verifies checksums. Runs on every MR as a merge gate.
 
 ## Security
 
-kit is a supply chain tool. Security is enforced at every layer:
+What kit actually does on the verification path:
 
 - **Input validation**: all fields validated against strict regex patterns
 - **TOML injection prevention**: mise config built via toml_edit API
-- **Supply chain attack detection**: same version + changed checksum = hard stop
-- **Dependency confusion prevention**: registry migration requires confirmation
-- **Cosign verification**: anchored certificate identity match
+- **Same-version checksum change detection**: hard stop
+- **Registry migration confirmation**: prevents silent swap between registries
+- **Cosign verification**: anchored certificate identity match (bare-binary assets only; archives fall back to checksums)
 - **Registry URL restriction**: https:// and git@ only
 - **Symlink rejection**: malicious registries cannot escape tools/ directory
 - **HTTPS-only**: all HTTP clients enforce TLS
 
-46 security findings identified and addressed across 5 adversarial
-review passes.
+What kit does not do: out-of-band checksum verification (checksums
+are fetched from the same release as the asset), archive-content
+signature verification, or human review substitution for tiers that
+auto-merge.
 
 ## License
 
