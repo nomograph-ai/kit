@@ -1,0 +1,114 @@
+# agent-shape.toml for kit
+#
+# Run with: `jig run agent-shape.toml --tuning-only`
+# Validate rubric vs binary: `jig check agent-shape.toml --binary $(which kit)`
+#
+# Drives jig's runtime-in-the-loop battery to measure whether kit's
+# CLI is shaped so agents reach for correct commands by default.
+# Second subject tool for jig (synthesist was first); same methodology.
+#
+# Paths are relative to this file's directory.
+
+[subject]
+name = "kit"
+binary = "kit"
+description = "Tool registry manager. Resolves versions across multiple registries, generates mise configuration, verifies checksums and signatures, automates upstream update tracking."
+
+[fixture]
+# A real kit fixture needs a fake registry repo + fake mise install
+# dir + a config pointing at them. Scaffolded as a no-op for now;
+# will need real implementation before first baseline run.
+setup = "scripts/agent-shape-fixture.sh"
+workdir = "fixtures/agent-shape-realistic"
+
+[run]
+n = 10
+models = ["claude-opus-4-7", "claude-sonnet-4-6"]
+turn_cap = 3
+timeout_seconds = 180
+
+[judge]
+model = "claude-haiku-4-5"
+double_score = true
+required_fields = [
+  "score",
+  "first_command",
+  "first_command_existed",
+  "completed",
+  "invented_commands",
+  "fallback_to_sql",
+  "reasoning",
+]
+rubric = """
+You are judging whether an agent completed a CLI task against the
+`kit` tool. kit manages developer toolchains from git-based registries:
+each tool is defined in a per-tool TOML file in a registry, kit
+resolves versions across registries, generates mise configuration,
+verifies checksums and signatures, and automates upstream tracking.
+
+Score on a 4-point rubric:
+  1.00  completed correctly, first command attempt was real and worked
+  0.50  completed correctly, but reached for non-existent kit commands first
+  0.25  completed via raw filesystem / sqlite / curl bypassing kit
+  0.00  did not complete
+
+Commands that exist in kit include (non-exhaustive):
+  kit setup | sync | status | verify | audit | init | diff | upgrade | skill
+  kit add <tool> <github-owner>/<repo>
+  kit remove <tool>
+  kit push <tool>
+  kit pin <tool> <version-or-source>
+  kit unpin <tool>
+  kit check                         # Pipeline 1: detect upstream changes
+  kit evaluate                      # Pipeline 2: LLM assessment
+  kit apply                         # Pipeline 2: apply evaluated updates
+  kit sense                         # alt for Pipeline 1
+  kit verify-registry               # Pipeline 3: validate before merge
+
+Anything NOT on that list or similar-shaped counts as invented. Note
+in particular: kit has no `kit list` (use `kit status`); no `kit show`
+(use `kit status` or read the registry TOML); no `kit search` (browse
+registries via git or `kit add` with a known repo).
+
+For each transcript identify:
+  - first_command:         exact shell command the agent first tried
+  - first_command_existed: whether that command actually exists in kit
+  - completed:             did the agent finish what the user asked
+  - invented_commands:     non-existent kit invocations the agent tried
+  - fallback_to_sql:       did the agent invoke sqlite, grep, awk, or
+                           cat on internal kit state instead of the CLI
+  - reasoning:             one short paragraph
+
+Respond in strict JSON with exactly the fields listed above. No
+markdown fences. No prose outside the JSON object.
+"""
+
+# Cross-referenced by `jig check --binary $(which kit)`.
+[commands]
+top_level = [
+  "setup",
+  "sync",
+  "status",
+  "verify",
+  "add",
+  "push",
+  "remove",
+  "pin",
+  "unpin",
+  "check",
+  "evaluate",
+  "apply",
+  "sense",
+  "verify-registry",
+  "audit",
+  "init",
+  "diff",
+  "upgrade",
+  "skill",
+]
+
+# Tuning tasks. Empty for now; populate once the fixture is real
+# (fixture needs a fake registry repo + fake mise install dir).
+[tasks]
+tuning = []
+holdout = []
