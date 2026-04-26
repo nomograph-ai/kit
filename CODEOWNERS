@@ -1,0 +1,5 @@
+# Default owner for everything
+* @andunn
+
+# CI pipeline changes need extra review
+.gitlab-ci.yml @andunn

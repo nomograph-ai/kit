@@ -7,14 +7,30 @@
   <text x="128" y="53" text-anchor="middle" font-size="20"
         fill="#faf6ed" font-weight="bold">kit</text>
 
-  <!-- Shield with checkmark: verified supply chain -->
-  <!-- Shield outline -->
-  <path d="M 128 85 L 170 100 L 170 155 Q 170 185, 128 205 Q 86 185, 86 155 L 86 100 Z"
-        fill="none" stroke="#2c2417" stroke-width="3"/>
-  <!-- Checkmark -->
-  <polyline points="107,145 122,165 153,125"
-            fill="none" stroke="#2c2417" stroke-width="4"
-            stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Stacked registry walk: primary -> thirdparty -> scratch -> lockfile -->
+  <!-- Top layer: primary registry -->
+  <rect x="64" y="86" width="128" height="22" fill="none"
+        stroke="#2c2417" stroke-width="3"/>
+  <line x1="76" y1="97" x2="180" y2="97" stroke="#2c2417" stroke-width="2"/>
+
+  <!-- Middle layer: thirdparty -->
+  <rect x="64" y="116" width="128" height="22" fill="none"
+        stroke="#2c2417" stroke-width="3"/>
+  <line x1="76" y1="127" x2="180" y2="127" stroke="#2c2417" stroke-width="2"/>
+
+  <!-- Bottom layer: scratch -->
+  <rect x="64" y="146" width="128" height="22" fill="none"
+        stroke="#2c2417" stroke-width="3"/>
+  <line x1="76" y1="157" x2="180" y2="157" stroke="#2c2417" stroke-width="2"/>
+
+  <!-- Walk-down arrow on the side -->
+  <line x1="48" y1="92" x2="48" y2="178" stroke="#2c2417" stroke-width="3"/>
+  <polygon points="44,172 48,184 52,172" fill="#2c2417"/>
+
+  <!-- Lockfile baseline (sealed) -->
+  <rect x="64" y="184" width="128" height="22" fill="#2c2417"/>
+  <text x="128" y="200" text-anchor="middle" font-size="12"
+        fill="#faf6ed" font-weight="bold">.lock</text>
 
   <line x1="60" y1="228" x2="196" y2="228" stroke="#c4b99a"
         stroke-width="2"/>
