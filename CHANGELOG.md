@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`agent-shape.toml`** at the repo root with `[commands].top_level`
+  enumerating 19 subcommands. Cross-validated against the binary via
+  `jig check --binary` so the shape file and the actual CLI surface
+  cannot drift apart silently.
+- **`scripts/agent-shape-fixture.sh`**, an idempotent fixture script
+  that seeds 3 registries for agent-shape tuning runs. Re-running it
+  is safe; existing state is left untouched.
+- **5 tuning tasks** under the agent-shape workflow plus a first
+  baseline (n=5).
+- **Treatment v0** for first-contact discoverability:
+  - `kit --help` now opens with a workflow preamble naming
+    `kit status`, `kit pin`, `kit unpin`, and `kit verify-registry`
+    so the first thing an agent reads points at the right entry
+    points.
+  - `kit skill` gains a first-contact section and worked examples.
+  - `kit status` prints a soft mtime nudge when `kit.toml` is newer
+    than the lockfile, pointing at `kit verify` to refresh derived
+    state. Non-fatal; safe across coarse-mtime filesystems.
+- **`hero.svg`** and **`avatar.svg`** in the nomograph paper-palette
+  OV-1 style.
+- **`CODEOWNERS`** at the repo root.
+
+### Changed
+
+- README aligned with current state; aspirational claims dropped.
+
 ## v0.11.0 (2026-04-23)
 
 Discipline pass bringing kit to parity with rune's hygiene posture
