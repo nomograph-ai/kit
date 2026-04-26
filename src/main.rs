@@ -987,7 +987,10 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
 ///   - first run before any sync (no lockfile yet)
 ///   - filesystems with coarse mtime granularity that report equal stamps
 ///   - clock skew / restored backups where mtimes are non-monotonic
-fn config_was_edited_after_lock(config_path: &std::path::Path, lock_path: &std::path::Path) -> bool {
+fn config_was_edited_after_lock(
+    config_path: &std::path::Path,
+    lock_path: &std::path::Path,
+) -> bool {
     let cfg_mtime = match std::fs::metadata(config_path).and_then(|m| m.modified()) {
         Ok(t) => t,
         Err(_) => return false,
@@ -1012,12 +1015,12 @@ fn cmd_status() -> Result<()> {
     // written, the agent likely bypassed kit pin/unpin/add. The derived
     // state (lockfile, mise config) is now stale relative to the source.
     // Don't fail; just point at `kit verify` so the next session sees it.
-    if let Ok(config_path) = ctx.config_path() {
-        if config_was_edited_after_lock(&config_path, &lockfile_path) {
-            eprintln!(
-                "Note: kit.toml was modified outside kit; run `kit verify` to refresh derived state."
-            );
-        }
+    if let Ok(config_path) = ctx.config_path()
+        && config_was_edited_after_lock(&config_path, &lockfile_path)
+    {
+        eprintln!(
+            "Note: kit.toml was modified outside kit; run `kit verify` to refresh derived state."
+        );
     }
 
     eprintln!("kit status [{}]\n", ctx.mode_label());
