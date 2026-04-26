@@ -5,128 +5,102 @@
   <!-- Title bar -->
   <rect x="0" y="0" width="1200" height="36" fill="#2c2417"/>
   <text x="16" y="24" font-family="'IBM Plex Mono', monospace"
-        font-size="14" fill="#faf6ed" font-weight="bold">kit</text>
+        font-size="14" fill="#faf6ed" font-weight="bold">kit -- tool-pin and registry manager</text>
   <text x="1184" y="24" font-family="'IBM Plex Mono', monospace"
-        font-size="11" fill="#c4b99a" text-anchor="end">verified tool registry manager</text>
+        font-size="11" fill="#c4b99a" text-anchor="end">project-local · additive · never destructive</text>
 
-  <!-- === LEFT: INPUTS (upstream sources + registries) === -->
-  <text x="60" y="65" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#6b5d4f">upstream sources</text>
+  <!-- Pipeline label -->
+  <rect x="40" y="52" width="1120" height="30" fill="none" stroke="#c4b99a" stroke-width="1"/>
+  <text x="56" y="72" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">walk-up -&gt; resolve -&gt; verify -&gt; materialize</text>
+  <text x="1144" y="72" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" text-anchor="end">checksum mismatch = HALT</text>
 
-  <rect x="60" y="78" width="180" height="40" fill="none"
-        stroke="#2c2417" stroke-width="1.5"/>
-  <text x="150" y="102" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#2c2417">GitHub releases</text>
-  <rect x="60" y="125" width="180" height="40" fill="none"
-        stroke="#2c2417" stroke-width="1.5"/>
-  <text x="150" y="149" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#2c2417">GitLab packages</text>
-  <rect x="60" y="172" width="180" height="40" fill="none"
-        stroke="#c4b99a" stroke-width="1.5"/>
-  <text x="150" y="196" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">npm / crates / direct</text>
+  <!-- === LEFT: INPUTS === -->
+  <rect x="40" y="100" width="260" height="250" fill="none" stroke="#2c2417" stroke-width="2"/>
+  <rect x="40" y="100" width="260" height="28" fill="#2c2417"/>
+  <text x="170" y="118" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">INPUTS</text>
 
-  <!-- Registries -->
-  <text x="60" y="240" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#6b5d4f">git-based registries</text>
+  <text x="56" y="148" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">kit.toml</text>
+  <text x="56" y="164" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  pin declarations (version, source)</text>
+  <text x="56" y="180" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  walk-up from cwd to find scope</text>
 
-  <rect x="60" y="252" width="240" height="90" fill="none"
-        stroke="#2c2417" stroke-width="2"/>
-  <rect x="60" y="252" width="240" height="22" fill="#2c2417"/>
-  <text x="180" y="268" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#faf6ed" font-weight="bold">kits/ (registry repo)</text>
-  <text x="75" y="290" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#2c2417">tools/gh.toml</text>
-  <text x="75" y="305" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">tools/jq.toml</text>
-  <text x="75" y="320" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">tools/muxr.toml</text>
-  <text x="75" y="335" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#c4b99a">version, source, checksums, sigs</text>
+  <line x1="56" y1="194" x2="284" y2="194" stroke="#c4b99a" stroke-width="1"/>
 
-  <!-- === CENTER: PROCESS (kit sync + verify) === -->
-  <line x1="250" y1="140" x2="380" y2="175" stroke="#c4b99a" stroke-width="1.5"/>
-  <line x1="310" y1="295" x2="380" y2="235" stroke="#c4b99a" stroke-width="1.5"/>
+  <text x="56" y="214" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">registries (git repos)</text>
+  <text x="56" y="230" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  primary -&gt; thirdparty -&gt; scratch</text>
+  <text x="56" y="246" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  TOML manifests + checksums</text>
+  <text x="56" y="262" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  signatures where bare-binary</text>
 
-  <rect x="380" y="100" width="380" height="220" fill="none"
-        stroke="#2c2417" stroke-width="2"/>
-  <rect x="380" y="100" width="380" height="28" fill="#2c2417"/>
-  <text x="570" y="120" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="12" fill="#faf6ed" font-weight="bold">kit sync + verify</text>
+  <line x1="56" y1="276" x2="284" y2="276" stroke="#c4b99a" stroke-width="1"/>
 
-  <!-- Resolution -->
-  <text x="400" y="150" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#2c2417" font-weight="bold">1. resolve</text>
-  <text x="415" y="165" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">multi-registry, first-wins priority</text>
-  <text x="415" y="178" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">apply local pins (version/registry)</text>
+  <text x="56" y="296" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">trust tiers</text>
+  <text x="56" y="312" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  own / high / low</text>
+  <text x="56" y="328" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  drives auto-merge policy</text>
 
-  <!-- Generate -->
-  <text x="400" y="200" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#2c2417" font-weight="bold">2. generate</text>
-  <text x="415" y="215" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">write mise config via toml_edit API</text>
-  <text x="415" y="228" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">mise install → binaries on PATH</text>
+  <text x="170" y="345" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f" text-anchor="middle">declared, not discovered</text>
 
-  <!-- Verify -->
-  <text x="400" y="250" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#2c2417" font-weight="bold">3. verify</text>
-  <text x="415" y="265" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">SHA256 checksums of installed binaries</text>
-  <text x="415" y="278" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">cosign keyless / GitHub attestation</text>
+  <!-- Arrow -->
+  <line x1="300" y1="225" x2="350" y2="225" stroke="#2c2417" stroke-width="1.5"/>
+  <polygon points="350,220 360,225 350,230" fill="#2c2417"/>
 
-  <!-- S-2 integrity -->
-  <rect x="400" y="290" width="340" height="22" fill="none"
-        stroke="#2c2417" stroke-width="1.5"/>
-  <text x="570" y="306" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#2c2417" font-weight="bold">S-2: same version + different checksum = HALT</text>
+  <!-- === CENTER: PROCESS === -->
+  <rect x="360" y="100" width="320" height="250" fill="none" stroke="#2c2417" stroke-width="2"/>
+  <rect x="360" y="100" width="320" height="28" fill="#2c2417"/>
+  <text x="520" y="118" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">kit sync</text>
+
+  <text x="376" y="148" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">1. walk-up + resolve</text>
+  <text x="376" y="164" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  multi-registry, first-wins</text>
+  <text x="376" y="180" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  apply local pins</text>
+
+  <line x1="376" y1="194" x2="664" y2="194" stroke="#c4b99a" stroke-width="1"/>
+
+  <text x="376" y="214" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">2. verify checksums</text>
+  <text x="376" y="230" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  SHA256 against publisher artifacts</text>
+  <text x="376" y="246" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  cosign keyless / gh attestation</text>
+
+  <line x1="376" y1="260" x2="664" y2="260" stroke="#c4b99a" stroke-width="1"/>
+
+  <text x="376" y="280" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">3. generate mise config</text>
+  <text x="376" y="296" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  toml_edit API, no string concat</text>
+  <text x="376" y="312" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  preserve user lines outside markers</text>
+
+  <text x="376" y="332" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">4. materialize cache</text>
+  <text x="520" y="332" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">mise install -&gt; PATH</text>
+
+  <!-- Arrow -->
+  <line x1="680" y1="225" x2="730" y2="225" stroke="#2c2417" stroke-width="1.5"/>
+  <polygon points="730,220 740,225 730,230" fill="#2c2417"/>
 
   <!-- === RIGHT: OUTPUTS === -->
-  <line x1="760" y1="165" x2="860" y2="110" stroke="#c4b99a" stroke-width="1.5"/>
-  <line x1="760" y1="210" x2="860" y2="210" stroke="#c4b99a" stroke-width="1.5"/>
-  <line x1="760" y1="280" x2="860" y2="310" stroke="#c4b99a" stroke-width="1.5"/>
+  <rect x="740" y="100" width="420" height="250" fill="none" stroke="#2c2417" stroke-width="2"/>
+  <rect x="740" y="100" width="420" height="28" fill="#2c2417"/>
+  <text x="950" y="118" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#faf6ed" text-anchor="middle" font-weight="bold">OUTPUTS</text>
 
-  <!-- Output: mise config -->
-  <rect x="860" y="70" width="280" height="70" fill="none"
-        stroke="#2c2417" stroke-width="2"/>
-  <text x="1000" y="90" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="11" fill="#2c2417" font-weight="bold">mise config.toml</text>
-  <text x="1000" y="110" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">pinned versions + checksums</text>
-  <text x="1000" y="125" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">platform-specific URLs</text>
+  <!-- mise config -->
+  <text x="756" y="148" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">.mise.toml</text>
+  <text x="756" y="164" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  pinned versions, checksums, URLs</text>
+  <text x="756" y="180" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  bracketed by # kit:begin / # kit:end</text>
+  <text x="756" y="196" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  hand-edited lines preserved</text>
 
-  <!-- Output: verified binaries -->
-  <rect x="860" y="170" width="280" height="70" fill="none"
-        stroke="#2c2417" stroke-width="2"/>
-  <text x="1000" y="190" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="11" fill="#2c2417" font-weight="bold">verified binaries</text>
-  <text x="1000" y="210" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">gh, jq, rune, muxr, ...</text>
-  <text x="1000" y="225" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">checksummed + signature-verified</text>
+  <line x1="756" y1="210" x2="1144" y2="210" stroke="#c4b99a" stroke-width="1"/>
 
-  <!-- Output: lockfile -->
-  <rect x="860" y="270" width="280" height="70" fill="none"
-        stroke="#2c2417" stroke-width="2"/>
-  <text x="1000" y="290" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="11" fill="#2c2417" font-weight="bold">lockfile.json</text>
-  <text x="1000" y="310" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">integrity baseline for drift detection</text>
-  <text x="1000" y="325" text-anchor="middle" font-family="'IBM Plex Mono', monospace"
-        font-size="9" fill="#6b5d4f">supply chain tamper evidence</text>
+  <!-- lockfile -->
+  <text x="756" y="230" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">.kit.lock</text>
+  <text x="756" y="246" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  integrity baseline</text>
+  <text x="756" y="262" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  drift detection on every sync</text>
+  <text x="756" y="278" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  same version + new checksum = HALT</text>
+
+  <line x1="756" y1="292" x2="1144" y2="292" stroke="#c4b99a" stroke-width="1"/>
+
+  <!-- cache -->
+  <text x="756" y="312" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#2c2417" font-weight="bold">cached artifacts</text>
+  <text x="756" y="328" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  verified binaries on PATH</text>
+  <text x="756" y="344" font-family="'IBM Plex Mono', monospace" font-size="9" fill="#6b5d4f">  reverifiable via kit verify</text>
 
   <!-- Footer -->
-  <line x1="40" y1="360" x2="1160" y2="360" stroke="#c4b99a" stroke-width="1"/>
-  <text x="600" y="380" font-family="'IBM Plex Mono', monospace"
-        font-size="10" fill="#6b5d4f" text-anchor="middle">Verified developer toolchains from git-based registries</text>
-  <text x="590" y="408" text-anchor="middle" fill="#2c2417"
-        font-family="'IBM Plex Mono', monospace" font-size="9"
-        font-weight="600">Built with GitLab</text>
-  <g transform="translate(634, 397) scale(0.045)">
+  <line x1="40" y1="370" x2="1160" y2="370" stroke="#c4b99a" stroke-width="1"/>
+  <text x="600" y="392" font-family="'IBM Plex Mono', monospace" font-size="10" fill="#6b5d4f" text-anchor="middle">declared pins + verified registries -&gt; reproducible toolchains</text>
+  <text x="590" y="416" text-anchor="middle" fill="#2c2417" font-family="'IBM Plex Mono', monospace" font-size="9" font-weight="600">Built with GitLab</text>
+  <g transform="translate(634, 405) scale(0.045)">
     <path d="M282.83,170.73l-.27-.69-26.14-68.22a6.81,6.81,0,0,0-2.69-3.24,7,7,0,0,0-8,.43,7,7,0,0,0-2.32,3.52l-17.65,54H154.29l-17.65-54A6.86,6.86,0,0,0,134.32,99a7,7,0,0,0-8-.43,6.87,6.87,0,0,0-2.69,3.24L97.44,170l-.26.69a48.54,48.54,0,0,0,16.1,56.1l.09.07.24.17,39.82,29.82,19.7,14.91,12,9.06a8.07,8.07,0,0,0,9.76,0l12-9.06,19.7-14.91,40.06-30,.1-.08A48.56,48.56,0,0,0,282.83,170.73Z" fill="#E24329"/>
     <path d="M282.83,170.73l-.27-.69a88.3,88.3,0,0,0-35.15,15.8L190,229.25c19.55,14.79,36.57,27.64,36.57,27.64l40.06-30,.1-.08A48.56,48.56,0,0,0,282.83,170.73Z" fill="#FC6D26"/>
     <path d="M153.43,256.89l19.7,14.91,12,9.06a8.07,8.07,0,0,0,9.76,0l12-9.06,19.7-14.91S209.55,244,190,229.25C170.45,244,153.43,256.89,153.43,256.89Z" fill="#FCA326"/>
