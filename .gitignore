@@ -9,3 +9,7 @@ checksums.txt
 # Fixtures seeded by jig agent-shape runs. Regenerated deterministically
 # by scripts/agent-shape-fixture.sh; the output has no value tracked.
 fixtures/
+
+# Runtime jig stdout — verbose per-trial console log. Reports + checkpoints
+# (.json / .md / .checkpoint.jsonl) are tracked; the runlog is not.
+agent-shape-reports/*.runlog
