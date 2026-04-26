@@ -18,23 +18,39 @@ use std::path::PathBuf;
 #[command(
     name = "kit",
     version,
-    about = "Verified tool registry manager",
-    long_about = "kit manages developer toolchains from git-based registries.\n\n\
-        Tools are defined in per-tool TOML files within registries. kit resolves versions\n\
-        across multiple registries, generates mise configuration, verifies checksums and\n\
-        signatures, and automates upstream update tracking.\n\n\
+    about = "kit manages tool dependency pins for reproducible environments.\n\
+        Common workflow:\n  \
+        kit status              what's pinned and what's stale\n  \
+        kit pin <tool> <ver>    pin a tool to a version\n  \
+        kit unpin <tool>        drop a pin\n  \
+        kit verify-registry     validate registry contents\n\
+        Edit kit.toml directly only as a last resort; the commands keep\n\
+        the lockfile and registry caches consistent. Run `kit skill` for\n\
+        the full behavioral contract.",
+    long_about = "kit manages tool dependency pins for reproducible environments.\n\n\
+        Tools are defined in per-tool TOML files within git-based registries. kit\n\
+        resolves versions across multiple registries, generates mise configuration,\n\
+        verifies checksums and signatures, and automates upstream update tracking.\n\n\
+        Common workflow:\n  \
+        kit status              what's pinned and what's stale\n  \
+        kit pin <tool> <ver>    pin a tool to a version\n  \
+        kit unpin <tool>        drop a pin\n  \
+        kit verify-registry     validate registry contents\n\n\
+        Edit kit.toml directly only as a last resort; the commands keep the\n\
+        lockfile and registry caches consistent. Run `kit skill` for the full\n\
+        behavioral contract (concepts, lifecycle, critical rules, gotchas).\n\n\
         Supply chain CI (three-pipeline architecture):\n  \
-        kit sense                     # Pipeline 1: detect upstream changes\n  \
-        kit evaluate + kit apply      # Pipeline 2: LLM assessment + MR\n  \
-        kit verify-registry           # Pipeline 3: validate before merge\n\n\
+        kit sense                     Pipeline 1: detect upstream changes\n  \
+        kit evaluate + kit apply      Pipeline 2: LLM assessment + MR\n  \
+        kit verify-registry           Pipeline 3: validate before merge\n\n\
         User commands:\n  \
-        kit setup                     # one-time: create config, add registry\n  \
-        kit sync                      # pull registries, generate mise config, verify\n  \
-        kit status                    # show installed vs registry, drift detection\n  \
-        kit verify                    # re-verify all installed binaries\n  \
-        kit add gh cli/cli            # add a tool from GitHub\n  \
-        kit pin gh 2.73.0             # pin a version locally\n  \
-        kit init --ci                 # create a new registry with CI automation"
+        kit setup                     one-time: create config, add registry\n  \
+        kit sync                      pull registries, generate mise config, verify\n  \
+        kit status                    show installed vs registry, drift detection\n  \
+        kit verify                    re-verify all installed binaries\n  \
+        kit add gh cli/cli            add a tool from GitHub\n  \
+        kit pin gh 2.73.0             pin a version locally\n  \
+        kit init --ci                 create a new registry with CI automation"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -961,13 +977,48 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Detect whether kit.toml was modified after the lockfile was last written.
+///
+/// Returns true only when both files exist, both mtimes are readable, and
+/// the config mtime is strictly newer than the lock mtime. Any I/O error
+/// or missing file yields false: this is a soft nudge, not a gate, and we
+/// must not produce false positives that would train agents to ignore it.
+/// Edge cases that intentionally return false:
+///   - first run before any sync (no lockfile yet)
+///   - filesystems with coarse mtime granularity that report equal stamps
+///   - clock skew / restored backups where mtimes are non-monotonic
+fn config_was_edited_after_lock(config_path: &std::path::Path, lock_path: &std::path::Path) -> bool {
+    let cfg_mtime = match std::fs::metadata(config_path).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let lock_mtime = match std::fs::metadata(lock_path).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    cfg_mtime > lock_mtime
+}
+
 fn cmd_status() -> Result<()> {
     let ctx = config::ConfigContext::resolve()?;
     let config = &ctx.config;
 
     let mut resolved = registry::resolve_tools(config)?;
     registry::apply_pins(&mut resolved, &config.pins, config)?;
-    let lock = lockfile::Lockfile::load_from(&ctx.lockfile_path()?)?;
+    let lockfile_path = ctx.lockfile_path()?;
+    let lock = lockfile::Lockfile::load_from(&lockfile_path)?;
+
+    // Soft nudge: if kit.toml was hand-edited after the lockfile was last
+    // written, the agent likely bypassed kit pin/unpin/add. The derived
+    // state (lockfile, mise config) is now stale relative to the source.
+    // Don't fail; just point at `kit verify` so the next session sees it.
+    if let Ok(config_path) = ctx.config_path() {
+        if config_was_edited_after_lock(&config_path, &lockfile_path) {
+            eprintln!(
+                "Note: kit.toml was modified outside kit; run `kit verify` to refresh derived state."
+            );
+        }
+    }
 
     eprintln!("kit status [{}]\n", ctx.mode_label());
 
@@ -1995,5 +2046,37 @@ mod tests {
     fn detect_bump_prerelease() {
         assert_eq!(detect_bump("1.0.0-beta.1", "1.0.0"), "patch");
         assert_eq!(detect_bump("1.0.0", "2.0.0-rc.1"), "major");
+    }
+
+    #[test]
+    fn config_edit_detection_returns_false_when_files_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("kit.toml");
+        let lock = dir.path().join(".kit.lock");
+        // Neither exists.
+        assert!(!config_was_edited_after_lock(&cfg, &lock));
+    }
+
+    #[test]
+    fn config_edit_detection_returns_false_when_lock_newer() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("kit.toml");
+        let lock = dir.path().join(".kit.lock");
+        std::fs::write(&cfg, "x").unwrap();
+        // Sleep enough to clear common mtime granularity (HFS+, FAT).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&lock, "y").unwrap();
+        assert!(!config_was_edited_after_lock(&cfg, &lock));
+    }
+
+    #[test]
+    fn config_edit_detection_returns_true_when_config_newer() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("kit.toml");
+        let lock = dir.path().join(".kit.lock");
+        std::fs::write(&lock, "y").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&cfg, "x").unwrap();
+        assert!(config_was_edited_after_lock(&cfg, &lock));
     }
 }
