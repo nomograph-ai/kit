@@ -107,8 +107,75 @@ top_level = [
   "skill",
 ]
 
-# Tuning tasks. Empty for now; populate once the fixture is real
-# (fixture needs a fake registry repo + fake mise install dir).
-[tasks]
-tuning = []
-holdout = []
+# Tuning tasks. The designer iterates against these. Expected to overfit;
+# this is disclosed as a threat to validity in the study write-up.
+
+[[tasks.tuning]]
+id = "estate-overview-01"
+summary = "What's set up in this kit project?"
+prompt = "You are looking at an unfamiliar project that uses kit. Use kit to give me a quick overview of which tools this project manages, which registries provide them, and any tools that are pinned."
+success_criteria = [
+  "Agent invokes `kit status` within the first 2 commands",
+  "Agent does not cat or grep kit.toml or files under cache/registries to assemble the answer",
+  "Agent identifies that gh is pinned",
+]
+author = "andrew@dunn.dev"
+created_at = "2026-04-25"
+sealed_against_tag = "kit-v0.11.0"
+
+[[tasks.tuning]]
+id = "pin-version-01"
+summary = "Hold ripgrep at an older version locally"
+prompt = "An upstream ripgrep release introduced a regression for our workflow. Pin ripgrep at version 14.1.0 in this project so kit sync stops bumping it, until the upstream fix lands."
+success_criteria = [
+  "Agent invokes `kit pin ripgrep 14.1.0` (with optional flags)",
+  "Agent does not hand-edit kit.toml directly",
+]
+author = "andrew@dunn.dev"
+created_at = "2026-04-25"
+sealed_against_tag = "kit-v0.11.0"
+
+[[tasks.tuning]]
+id = "release-pin-01"
+summary = "Drop a stale pin"
+prompt = "There is a pin on `gh` left over from a regression that has since been resolved upstream. Release the pin so this project picks up the registry-resolved version again."
+success_criteria = [
+  "Agent invokes `kit unpin gh` within the first 2 commands",
+  "Agent does not hand-edit kit.toml directly",
+]
+author = "andrew@dunn.dev"
+created_at = "2026-04-25"
+sealed_against_tag = "kit-v0.11.0"
+
+[[tasks.tuning]]
+id = "registry-validation-01"
+summary = "Validate the primary registry before merge"
+prompt = "Before merging an MR into the `primary` tool registry that lives under cache/registries/primary, validate every tool definition there. Report which tool (if any) fails validation and why."
+success_criteria = [
+  "Agent invokes `kit verify-registry --registry <path-to-primary>`",
+  "Agent identifies synthesist as the failing tool",
+  "Agent does not bypass kit by reading the TOML files directly with cat or grep first",
+]
+author = "andrew@dunn.dev"
+created_at = "2026-04-25"
+sealed_against_tag = "kit-v0.11.0"
+
+[[tasks.tuning]]
+id = "registry-precedence-01"
+summary = "Explain which registry wins for a shadowed tool"
+prompt = "Both the `primary` and `thirdparty` registries define ripgrep. Tell me which one this project actually resolves to, and why."
+success_criteria = [
+  "Agent invokes `kit status` to surface the resolution",
+  "Agent identifies primary as the winning registry",
+  "Agent explains the resolution rule (registry order in config; first match wins)",
+  "Agent does not invent a `kit show` or `kit list` command",
+]
+author = "andrew@dunn.dev"
+created_at = "2026-04-25"
+sealed_against_tag = "kit-v0.11.0"
+
+# Hold-out tasks intentionally empty in v1. Schema supports them; the
+# corpus will be populated later by authors who have not seen tuning
+# results. Provenance (author, created_at, sealed_against_tag) on each
+# task will prove the separation.
+# [[tasks.holdout]]  (none yet)
