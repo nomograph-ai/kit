@@ -1,10 +1,31 @@
-# kit — developer toolchain supply chain
+# kit -- developer toolchain supply chain
 
 Manage the versions and verification posture of developer binaries (CLI
 tools, runtimes) from git-based registries. Resolves cross-registry tool
 defs, generates mise configuration, enforces cosign / attestation /
 checksum verification per tier, and automates upstream bump tracking via
 a three-pipeline CI architecture.
+
+## First contact: what to run
+
+Whenever you arrive at a project that uses kit, the entry point is
+`kit status`. It surfaces every tool kit knows about, which registry won
+the resolution, current vs locked version, tier, verification method,
+and any pins. From there:
+
+- Want to change a version locally? `kit pin <tool> <version>` (or
+  `kit unpin <tool>` to release).
+- Want fresh upstream state? `kit sync` (or `kit upgrade` for the
+  interactive variant).
+- Want to validate a registry checkout before merge? `kit verify-registry
+  --registry <path>`.
+
+Do not hand-edit `kit.toml` (the project config) or
+`~/.config/mise/conf.d/kit.toml` (the generated lockfile). Both will be
+silently overwritten by the next kit run, and the registry cache will
+drift out of sync. Use `kit pin` / `kit unpin` / `kit add` / `kit
+remove` instead. If you have already hand-edited, run `kit verify` to
+re-derive state.
 
 ## Concepts
 
@@ -73,6 +94,52 @@ user runs `kit sync`  → mise picks up the new resolved version
 6. **`verify_signatures = true` stays on.** Turning it off "temporarily
    to debug a breakage" hides the signal you need to debug the
    breakage. If a signature is failing, find out why, don't silence it.
+
+## Worked examples
+
+### Pin a tool to hold back a regression
+
+```bash
+# Upstream ripgrep 14.2.0 broke a workflow. Hold it at 14.1.0
+# until the upstream fix lands.
+kit pin ripgrep 14.1.0
+kit sync                  # regenerates mise config with the pin honoured
+kit status                # confirms ripgrep shows "(pinned)"
+```
+
+### Drop a stale pin
+
+```bash
+# `gh` was pinned during a regression that has since been fixed
+# upstream. Release the pin to pick up the registry's chosen version.
+kit unpin gh
+kit sync                  # mise config now follows the registry again
+```
+
+### Validate a registry checkout before merge
+
+```bash
+# Pipeline 3 / pre-merge gate. Validates every TOML in tools/, re-checks
+# checksums, and reports failures with a non-zero exit on bad state.
+kit verify-registry --registry cache/registries/primary
+```
+
+### Inspect a shadowed tool
+
+```bash
+# Two registries both define ripgrep. Which one wins?
+kit status                # the SOURCE column shows kit(<registry-name>)
+                          # for the resolved registry. First registry in
+                          # config order wins; later defs are shadowed.
+```
+
+### Add a new tool to a writable registry
+
+```bash
+kit add gh cli/cli        # GitHub source (default)
+kit add muxr nomograph/muxr --gitlab
+kit push gh               # publish the new TOML to the registry remote
+```
 
 ## When to use which
 
