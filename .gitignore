@@ -5,3 +5,7 @@
 checksums-*.txt
 checksums.txt
 *.sbom.cdx.json
+
+# Fixtures seeded by jig agent-shape runs. Regenerated deterministically
+# by scripts/agent-shape-fixture.sh; the output has no value tracked.
+fixtures/
