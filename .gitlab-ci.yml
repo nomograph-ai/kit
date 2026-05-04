@@ -1,13 +1,13 @@
 # gitlab.com/nomograph/kit .gitlab-ci.yml
 #
-# Pipeline structure provided by nomograph/pipeline tool-rust@v4.1.2.
+# Pipeline structure provided by nomograph/pipeline tool-rust@v4.1.7.
 
 default:
   tags: [storr]
 
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
-  - component: gitlab.com/nomograph/pipeline/tool-rust@v4.1.2
+  - component: gitlab.com/nomograph/pipeline/tool-rust@v4.1.7
     inputs:
       binary_name: kit
       project_description: "Verified tool registry manager for the nomograph estate."
