@@ -9,7 +9,17 @@ homepage = "https://gitlab.com/nomograph/kit"
 keywords = ["supply-chain", "tools", "mise", "registry", "verification"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
-exclude = ["*.png", "*.svg", "hero.*", "avatar.*"]
+exclude = [
+    "*.png",
+    "*.svg",
+    "hero.*",
+    "avatar.*",
+    # Dev-only files; downstream Rust consumers don't need them.
+    "agent-shape.toml",         # jig rubric for our own CI; useless to crates.io consumers
+    "agent-shape-reports/*",    # jig run outputs (regression baselines)
+    "scripts/*",                # CI helpers (check-symlinks.sh, etc.)
+    ".file-size-waiver",        # CI waiver list; not relevant downstream
+]
 license = "MIT"
 
 [[bin]]
