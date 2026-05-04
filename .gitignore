@@ -28,3 +28,9 @@ agent-shape-reports/*.runlog
 # whole directory; `.claude/rune.lock` (which is tracked) pins which
 # registry version each skill came from.
 .claude/skills/
+
+# `.claude/` is local-only: rune subscriptions, lockfile, and synced skill
+# content are all per-developer state. Run `rune setup` then `rune sync` on
+# a fresh clone to materialize.
+.claude/
+AGENTS.md
