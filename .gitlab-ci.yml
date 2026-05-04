@@ -2,6 +2,9 @@
 #
 # Pipeline structure provided by nomograph/pipeline tool-rust@v4.1.2.
 
+default:
+  tags: [storr]
+
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
   - component: gitlab.com/nomograph/pipeline/tool-rust@v4.1.2
