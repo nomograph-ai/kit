@@ -10,6 +10,8 @@
 Tool registry manager -- manages developer toolchains from git-based
 registries, layered on top of [mise](https://mise.jdx.dev).
 
+## What it is
+
 kit resolves tool versions across multiple registries, generates mise
 configuration, verifies SHA-256 checksums against publisher release
 artifacts, verifies cosign signatures where publishers sign bare
