@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.0] (2026-05-09)
+
+### Added
+
+- **`brew` source backend.** `kit add <tool> --brew` registers a Homebrew
+  formula; kit version-tracks via the formulae.brew.sh API and emits
+  `brew:<formula>@<version>` entries in `mise.toml`. The formula name defaults
+  to the tool name but can be overridden (`--brew go@1.21`). Install is
+  delegated to mise's existing `brew:` backend — no local `brew` CLI required
+  in CI. Version-update tracking is handled by the new `check_brew` function
+  in `ci/check.rs`.
+
+### Changed
+
+- **Makefile** added with standard `help` / `build` / `test` / `clean` / `lint`
+  surface.
+- **CI pipeline** migrated to `tool-rust@v4.1.7` with LFS-routed
+  `agent-shape-reports`.
+- `notify-kits` downstream trigger added to `.gitlab-ci.yml` so a kit
+  auto-MR in `nomograph/kits` fires on each tag push.
+
 ## [0.12.0] (2026-04-26)
 
 ### Added
