@@ -54,6 +54,7 @@ pub fn generate(tools: &[ResolvedTool], config: &Config) -> Result<String> {
             ToolEntry::Http => {
                 http_entries.push(rt);
             }
+            ToolEntry::Skip => {} // e.g. brew -- not a mise-managed tool
         }
     }
 
@@ -174,6 +175,7 @@ fn build_kit_section(tools: &[ResolvedTool]) -> Result<String> {
         match classify(rt) {
             ToolEntry::Flat { key, version } => flat_entries.push((rt, key, version)),
             ToolEntry::Http => http_entries.push(rt),
+            ToolEntry::Skip => {}
         }
     }
 
@@ -289,9 +291,10 @@ fn detect_conflicts(existing: &str, tools: &[ResolvedTool]) -> Result<Vec<MiseCo
     // Build kit tool keys for comparison
     let kit_keys: std::collections::HashMap<String, String> = tools
         .iter()
-        .map(|rt| match classify(rt) {
-            ToolEntry::Flat { key, version } => (key, version),
-            ToolEntry::Http => (format!("http:{}", rt.def.name), rt.def.version.clone()),
+        .filter_map(|rt| match classify(rt) {
+            ToolEntry::Flat { key, version } => Some((key, version)),
+            ToolEntry::Http => Some((format!("http:{}", rt.def.name), rt.def.version.clone())),
+            ToolEntry::Skip => None,
         })
         .collect();
 
@@ -365,6 +368,8 @@ enum ToolEntry {
     Flat { key: String, version: String },
     /// A `[tools."http:name"]` subtable with platform URLs.
     Http,
+    /// Not managed by mise; handled outside (e.g. brew direct install).
+    Skip,
 }
 
 /// Determine the mise backend representation for a resolved tool.
@@ -389,13 +394,10 @@ fn classify(rt: &ResolvedTool) -> ToolEntry {
                 version: def.version.clone(),
             }
         }
-        Source::Brew => {
-            let formula = def.formula.as_deref().unwrap_or(&def.name);
-            ToolEntry::Flat {
-                key: def.name.clone(),
-                version: format!("brew:{formula}@{}", def.version),
-            }
-        }
+        // Brew tools are installed directly via `brew install`; they do not
+        // go in mise.toml. Skipping here keeps mise.toml clean and avoids
+        // trying to use a brew: backend that mise does not have.
+        Source::Brew => ToolEntry::Skip,
         Source::Github => {
             if def.aqua.is_some() {
                 // Aqua-backed: mise resolves via its aqua registry
@@ -1019,6 +1021,26 @@ linux-x64 = "dolt-linux-amd64"
         assert!(
             output.contains("https://example.com/custom-tool-3.0.0-darwin-arm64"),
             "expected direct URL in output, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn brew_source_not_emitted_to_mise_toml() {
+        let mut def = make_tool("ripgrep", Source::Brew, "14.1.1");
+        def.formula = Some("ripgrep".to_string());
+
+        let tools = vec![resolved(def)];
+        let output = generate(&tools, &test_config()).unwrap();
+
+        // Source::Brew tools must not appear in mise.toml -- they're
+        // installed directly by kit via `brew install`, not via mise.
+        assert!(
+            !output.contains("ripgrep"),
+            "brew tool should not appear in mise.toml, got:\n{output}"
+        );
+        assert!(
+            !output.contains("brew:"),
+            "brew: prefix must not appear in mise.toml, got:\n{output}"
         );
     }
 

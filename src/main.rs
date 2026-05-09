@@ -938,6 +938,9 @@ fn cmd_sync(auto_yes: bool) -> Result<()> {
         );
     }
 
+    // 6.5. Install brew tools directly (mise has no brew backend).
+    install_brew_tools(&resolved)?;
+
     // 7. Update lockfile
     // T3-1: store registry checksums and binary checksums separately.
     // Registry checksums (inline + downloaded) are used by S-2 integrity checks.
@@ -1103,11 +1106,34 @@ fn cmd_verify() -> Result<()> {
     for rt in &resolved {
         eprint!("  {:<20} {:<12} ", rt.def.name, rt.def.version);
 
+        // Brew tools: verify via `brew list <formula>` (exit 0 = installed).
+        if rt.def.source == tool::Source::Brew {
+            let formula = rt.def.formula.as_deref().unwrap_or(&rt.def.name);
+            let check = std::process::Command::new("brew")
+                .args(["list", formula])
+                .output();
+            match check {
+                Ok(out) if out.status.success() => {
+                    eprintln!("ok  (brew list)");
+                    pass += 1;
+                }
+                Ok(_) => {
+                    eprintln!("FAIL  (brew list: not installed)");
+                    fail += 1;
+                }
+                Err(e) => {
+                    eprintln!("error  (brew list: {e})");
+                    skip += 1;
+                }
+            }
+            continue;
+        }
+
         // Tools installed via package managers (npm, crates, rustup) don't have
         // download URLs for checksum verification -- skip them early.
         if matches!(
             rt.def.source,
-            tool::Source::Npm | tool::Source::Crates | tool::Source::Rustup | tool::Source::Brew
+            tool::Source::Npm | tool::Source::Crates | tool::Source::Rustup
         ) {
             eprintln!("skip  (package-manager install, no binary checksum)");
             skip += 1;
@@ -1933,6 +1959,42 @@ fn has_checksum(def: &tool::ToolDef) -> &'static str {
     } else {
         "none"
     }
+}
+
+/// Install Source::Brew tools by shelling out to `brew install <formula>`.
+///
+/// Idempotent: runs `brew list <formula>` first and skips if already installed.
+/// Called from cmd_sync after mise install.
+fn install_brew_tools(resolved: &[registry::ResolvedTool]) -> Result<()> {
+    for rt in resolved {
+        if rt.def.source != tool::Source::Brew {
+            continue;
+        }
+        let formula = rt.def.formula.as_deref().unwrap_or(&rt.def.name);
+        // Idempotent: skip if already installed.
+        let check = std::process::Command::new("brew")
+            .args(["list", formula])
+            .output();
+        if let Ok(out) = check
+            && out.status.success()
+        {
+            eprintln!("  brew: {formula} already installed");
+            continue;
+        }
+        // Install.
+        eprint!("  brew install {formula}... ");
+        let install = std::process::Command::new("brew")
+            .args(["install", formula])
+            .output()
+            .with_context(|| format!("failed to invoke brew for {formula}"))?;
+        if install.status.success() {
+            eprintln!("ok");
+        } else {
+            let stderr = String::from_utf8_lossy(&install.stderr);
+            anyhow::bail!("brew install {formula} failed: {stderr}");
+        }
+    }
+    Ok(())
 }
 
 /// F6: compute the actual SHA256 of an installed binary.
