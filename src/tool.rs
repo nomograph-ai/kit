@@ -72,6 +72,7 @@ pub enum Source {
     Crates,
     Direct,
     Rustup,
+    Brew,        // macOS Homebrew formula via mise's brew backend
 }
 
 /// Checksum verification format.
@@ -138,6 +139,8 @@ pub struct ToolDef {
     pub package: Option<String>,
     #[serde(rename = "crate", default)]
     pub crate_name: Option<String>,
+    #[serde(default)]
+    pub formula: Option<String>,    // for Source::Brew -- the brew formula name
 
     /// Mise aqua registry name (e.g., "cli/cli" for gh).
     /// If set, kit generates `tool = "version"` instead of `http:tool`.
@@ -264,7 +267,7 @@ impl ToolDef {
                 // For direct sources, the asset IS the full URL (after version expansion)
                 Some(asset)
             }
-            // npm, crates, rustup don't have download URLs -- mise handles them
+            // npm, crates, rustup, brew don't have download URLs -- mise handles them
             _ => None,
         }
     }
@@ -406,6 +409,9 @@ impl ToolDef {
             }
             Source::Crates => {
                 // crate defaults to name, so no required field
+            }
+            Source::Brew => {
+                // formula defaults to name, so no required field
             }
             Source::Direct => {
                 if self.assets.is_empty() {
@@ -588,6 +594,7 @@ mod tests {
             project_id: None,
             package: None,
             crate_name: None,
+            formula: None,
             aqua: Some("cli/cli".to_string()),
             assets: HashMap::from([
                 (
@@ -629,6 +636,7 @@ mod tests {
             project_id: Some(80663080),
             package: None,
             crate_name: None,
+            formula: None,
             aqua: None,
             assets: HashMap::from([
                 ("macos-arm64".to_string(), "muxr-darwin-arm64".to_string()),
@@ -683,12 +691,54 @@ mod tests {
             project_id: None,
             package: None,
             crate_name: None,
+            formula: None,
             aqua: None,
             assets: HashMap::new(),
             checksum: None,
             checksums: HashMap::new(),
             signature: None,
         }
+    }
+
+    #[test]
+    fn source_brew_serializes_to_brew() {
+        // Wrap in a struct so toml can serialize (TOML requires a top-level table).
+        #[derive(Serialize)]
+        struct W { s: Source }
+        let toml_str = toml::to_string(&W { s: Source::Brew }).unwrap();
+        assert!(toml_str.contains("brew"), "expected 'brew' in {toml_str}");
+    }
+
+    #[test]
+    fn tooldef_brew_roundtrip() {
+        let def = ToolFile {
+            tool: ToolDef {
+                name: "chafa".to_string(),
+                description: None,
+                source: Source::Brew,
+                version: "1.18.2".to_string(),
+                tag_prefix: String::new(),
+                bin: None,
+                tier: Tier::Low,
+                repo: None,
+                project_id: None,
+                package: None,
+                crate_name: None,
+                formula: Some("chafa".to_string()),
+                aqua: None,
+                assets: HashMap::new(),
+                checksum: None,
+                checksums: HashMap::new(),
+                signature: None,
+            },
+        };
+        let toml_str = toml::to_string_pretty(&def).unwrap();
+        assert!(toml_str.contains("source = \"brew\""), "source not brew in {toml_str}");
+        assert!(toml_str.contains("formula = \"chafa\""), "formula missing in {toml_str}");
+        let roundtripped: ToolFile = toml::from_str(&toml_str).unwrap();
+        assert_eq!(roundtripped.tool.source, Source::Brew);
+        assert_eq!(roundtripped.tool.formula.as_deref(), Some("chafa"));
+        assert_eq!(roundtripped.tool.version, "1.18.2");
     }
 
     #[test]

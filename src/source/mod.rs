@@ -302,6 +302,48 @@ pub fn query_crates(crate_name: &str) -> Result<UpstreamInfo> {
     })
 }
 
+// -- Brew --
+
+/// Brew formula names: lowercase + hyphens + dots + plus + at-sign.
+const BREW_FORMULA_PATTERN: &str = r"^[a-z0-9][a-z0-9._@+-]*$";
+
+static BREW_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(BREW_FORMULA_PATTERN).unwrap());
+
+/// Query the latest version of a Homebrew formula via the public API.
+///
+/// Uses https://formulae.brew.sh/api/formula/<formula>.json (no brew CLI
+/// required, suitable for CI). Returns version only -- no platform assets
+/// (mise/brew handles platform variance) and no checksums (brew verifies
+/// internally via bottle signatures).
+pub fn query_brew(formula: &str) -> Result<UpstreamInfo> {
+    if !BREW_RE.is_match(formula) {
+        anyhow::bail!("invalid brew formula '{formula}': must match {BREW_FORMULA_PATTERN}");
+    }
+    let url = format!("https://formulae.brew.sh/api/formula/{formula}.json");
+    let output = run_command("curl", &["-sf", "--max-time", "30", &url])
+        .context("failed to query brew formula API -- network or formula missing")?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)
+        .context("failed to parse brew formula API JSON")?;
+    let version = parsed
+        .pointer("/versions/stable")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("brew API returned no stable version for '{formula}'"))?
+        .to_string();
+    if version.is_empty() {
+        anyhow::bail!("brew returned empty version for '{formula}'");
+    }
+    Ok(UpstreamInfo {
+        version,
+        tag_prefix: String::new(),  // brew formulas use bare version numbers
+        assets: HashMap::new(),     // mise+brew handles platform; no per-asset tracking
+        checksum_file: None,
+        checksum_format: None,
+        project_id: None,
+        signature_method: None,
+    })
+}
+
 // -- Internal helpers --
 
 /// Validate a repo string against the safe pattern.
@@ -777,5 +819,32 @@ mod tests {
         assert!(!CRATE_RE.is_match("; rm -rf /"));
         assert!(!CRATE_RE.is_match(""));
         assert!(!CRATE_RE.is_match("@scoped/crate"));
+    }
+
+    #[test]
+    fn brew_pattern_accepts_valid() {
+        assert!(BREW_RE.is_match("chafa"));
+        assert!(BREW_RE.is_match("git-lfs"));
+        assert!(BREW_RE.is_match("node"));
+        assert!(BREW_RE.is_match("go@1.21"));
+        assert!(BREW_RE.is_match("lib+a.b"));
+    }
+
+    #[test]
+    fn brew_pattern_rejects_invalid() {
+        assert!(!BREW_RE.is_match(""));
+        assert!(!BREW_RE.is_match("-bad"));
+        assert!(!BREW_RE.is_match("Evil Formula"));
+        assert!(!BREW_RE.is_match("../traversal"));
+        assert!(!BREW_RE.is_match("; rm -rf /"));
+        assert!(!BREW_RE.is_match("has/slash"));
+    }
+
+    #[test]
+    fn query_brew_rejects_invalid_formula() {
+        // Pure regex validation -- no network call.
+        let result = super::query_brew("-invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid brew formula"));
     }
 }

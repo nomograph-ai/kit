@@ -252,6 +252,7 @@ mod tests {
             project_id: None,
             package: None,
             crate_name: None,
+            formula: None,
             aqua: None,
             assets: HashMap::new(),
             checksum: None,

@@ -109,7 +109,11 @@ format = "sha256"
 method = "github-attestation"
 ```
 
-Sources: `github`, `gitlab`, `npm`, `crates`, `direct`, `rustup`
+Sources: `github`, `gitlab`, `npm`, `crates`, `direct`, `rustup`, `brew`
+
+The `brew` source delegates install to mise's `brew:` backend (no local `brew` CLI
+required in CI). kit version-tracks via the formulae.brew.sh API and emits
+`name = "brew:<formula>@<version>"` entries in mise.toml.
 
 Smart `kit add` queries upstream and auto-populates:
 
@@ -118,6 +122,8 @@ kit add jq jqlang/jq              # GitHub
 kit add muxr nomograph/muxr --gitlab  # GitLab (resolves project_id)
 kit add claude-code --npm @anthropic-ai/claude-code
 kit add cargo-nextest --crates
+kit add chafa --brew              # Homebrew formula (formula defaults to tool name)
+kit add go121 --brew go@1.21     # Homebrew formula with explicit formula name
 ```
 
 ### Trust tiers

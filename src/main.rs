@@ -97,6 +97,9 @@ enum Commands {
         /// Crates.io package
         #[arg(long)]
         crates: bool,
+        /// Homebrew formula
+        #[arg(long)]
+        brew: bool,
     },
 
     /// Push a tool definition to its registry
@@ -254,7 +257,8 @@ fn main() -> Result<()> {
             gitlab,
             npm,
             crates,
-        } => cmd_add(&name, source.as_deref(), gitlab, npm, crates),
+            brew,
+        } => cmd_add(&name, source.as_deref(), gitlab, npm, crates, brew),
 
         Commands::Push { name } => cmd_push(&name),
         Commands::Remove { name } => cmd_remove(&name),
@@ -462,6 +466,10 @@ fn cmd_upgrade(auto_yes: bool, tool_filter: Option<&str>) -> Result<()> {
             }
             tool::Source::Crates => {
                 eprintln!("{:<12} skip (crates)", rt.def.version);
+                continue;
+            }
+            tool::Source::Brew => {
+                eprintln!("{:<12} skip (brew)", rt.def.version);
                 continue;
             }
             _ => {}
@@ -1099,7 +1107,7 @@ fn cmd_verify() -> Result<()> {
         // download URLs for checksum verification -- skip them early.
         if matches!(
             rt.def.source,
-            tool::Source::Npm | tool::Source::Crates | tool::Source::Rustup
+            tool::Source::Npm | tool::Source::Crates | tool::Source::Rustup | tool::Source::Brew
         ) {
             eprintln!("skip  (package-manager install, no binary checksum)");
             skip += 1;
@@ -1143,7 +1151,7 @@ fn cmd_verify() -> Result<()> {
     Ok(())
 }
 
-fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bool) -> Result<()> {
+fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bool, brew: bool) -> Result<()> {
     tool::validate_name(name)?;
     let ctx = config::ConfigContext::resolve()?;
     let config = &ctx.config;
@@ -1162,19 +1170,29 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bo
         anyhow::bail!("{name} already exists in registry {}", reg.name);
     }
 
-    let (source_type, repo, pkg, crate_name) = if crates {
+    let (source_type, repo, pkg, crate_name, formula) = if crates {
         (
             tool::Source::Crates,
             None,
             None,
             source.map(|s| s.to_string()),
+            None,
         )
     } else if npm {
-        (tool::Source::Npm, None, source.map(|s| s.to_string()), None)
+        (tool::Source::Npm, None, source.map(|s| s.to_string()), None, None)
+    } else if brew {
+        (
+            tool::Source::Brew,
+            None,
+            None,
+            None,
+            source.map(|s| s.to_string()),
+        )
     } else if gitlab {
         (
             tool::Source::Gitlab,
             source.map(|s| s.to_string()),
+            None,
             None,
             None,
         )
@@ -1182,6 +1200,7 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bo
         (
             tool::Source::Github,
             source.map(|s| s.to_string()),
+            None,
             None,
             None,
         )
@@ -1245,6 +1264,21 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bo
             let crate_str = source.unwrap_or(name);
             eprint!("  querying crates.io {crate_str}... ");
             match source::query_crates(crate_str) {
+                Ok(info) => {
+                    eprintln!("ok ({})", info.version);
+                    Some(info)
+                }
+                Err(e) => {
+                    eprintln!("failed ({e:#})");
+                    eprintln!("  falling back to skeleton definition");
+                    None
+                }
+            }
+        }
+        tool::Source::Brew => {
+            let formula_str = formula.as_deref().unwrap_or(name);
+            eprint!("  querying brew formula {formula_str}... ");
+            match source::query_brew(formula_str) {
                 Ok(info) => {
                     eprintln!("ok ({})", info.version);
                     Some(info)
@@ -1344,6 +1378,7 @@ fn cmd_add(name: &str, source: Option<&str>, gitlab: bool, npm: bool, crates: bo
             project_id: resolved_project_id,
             package: pkg,
             crate_name,
+            formula,
             aqua,
             assets,
             checksum,

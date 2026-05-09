@@ -389,6 +389,13 @@ fn classify(rt: &ResolvedTool) -> ToolEntry {
                 version: def.version.clone(),
             }
         }
+        Source::Brew => {
+            let formula = def.formula.as_deref().unwrap_or(&def.name);
+            ToolEntry::Flat {
+                key: def.name.clone(),
+                version: format!("brew:{formula}@{}", def.version),
+            }
+        }
         Source::Github => {
             if def.aqua.is_some() {
                 // Aqua-backed: mise resolves via its aqua registry
@@ -480,6 +487,7 @@ mod tests {
             project_id: None,
             package: None,
             crate_name: None,
+            formula: None,
             aqua: None,
             assets: HashMap::new(),
             checksum: None,

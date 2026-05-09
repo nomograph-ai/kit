@@ -148,6 +148,7 @@ fn check_tool(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
             );
             Ok(None)
         }
+        Source::Brew => check_brew(def),
     }
 }
 
@@ -388,6 +389,44 @@ fn check_crates(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
         checksums: HashMap::new(),
         verified: HashMap::new(),
         note: Some("cargo crate -- checksums verified by cargo on install".to_string()),
+    }))
+}
+
+fn check_brew(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
+    let formula = def.formula.as_deref().unwrap_or(&def.name);
+    let url = format!("https://formulae.brew.sh/api/formula/{formula}.json");
+
+    let output = match run_cmd("curl", &["-sf", "--max-time", "30", &url], None) {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!(
+                "  {}: {} (skip -- curl not available or brew API unreachable)",
+                def.name, def.version
+            );
+            return Ok(None);
+        }
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(&output)
+        .context("failed to parse brew formula API JSON")?;
+    let latest = parsed
+        .pointer("/versions/stable")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("brew API returned no stable version for '{formula}'"))?
+        .to_string();
+
+    if latest.is_empty() || latest == def.version {
+        return Ok(None);
+    }
+
+    Ok(Some(UpdateCandidate {
+        name: def.name.clone(),
+        current_version: def.version.clone(),
+        new_version: latest,
+        tag: String::new(),
+        checksums: HashMap::new(),
+        verified: HashMap::new(),
+        note: Some("brew formula -- integrity verified by brew on install".to_string()),
     }))
 }
 

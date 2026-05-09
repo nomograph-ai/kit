@@ -674,6 +674,7 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
             project_id: None,
             package: None,
             crate_name: None,
+            formula: None,
             aqua: None,
             assets: assets
                 .into_iter()
