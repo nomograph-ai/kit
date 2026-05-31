@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0] (2026-05-31)
+
+### Added
+
+- **npm `dist.integrity` verification.** `check_npm` now fetches the
+  package's `dist.integrity` (sha512 SRI) and `dist.tarball`, downloads the
+  tarball, and verifies its SHA-512 before recording the update. npm-source
+  tools (mmdc, wrangler, claude-code) populate a verified checksum instead of
+  being perpetually unverified, so low-tier npm tools become auto-merge
+  eligible. Hard-fails on integrity mismatch.
+- **yq multi-hash checksum format** (`ChecksumFormat::YqMultiHash`). yq
+  publishes a nonstandard filename-first `checksums` file with one column per
+  hash algorithm plus a `checksums_hashes_order` index. The new parser reads
+  the order file to locate the SHA-256 column and extracts it. The old
+  sha256 parser misread the format, so yq failed verification every cycle.
+
 ## [0.13.0] (2026-05-09)
 
 ### Added
