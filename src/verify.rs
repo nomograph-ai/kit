@@ -978,7 +978,7 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
         let mut hasher = sha2::Sha512::new();
         hasher.update(payload);
         let digest = hasher.finalize();
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&digest);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(digest);
         let sri = format!("sha512-{b64}");
 
         // Parse and compare.
