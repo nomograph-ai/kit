@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.1] (2026-05-31)
+
+### Fixed
+
+- **npm checksum key rejected by `validate()`.** 0.14.0 recorded the
+  npm-integrity checksum under the `"npm"` sentinel key, but `ToolDef::validate`
+  required every checksum key to be a known platform, so `verify-registry`
+  rejected every applied npm tool ("invalid tool definition"). This blocked the
+  whole auto-merge MR (npm tools batch with verified low-tier tools like yq).
+  `validate()` now accepts the `"npm"` key for npm-source tools.
+
 ## [0.14.0] (2026-05-31)
 
 ### Added
