@@ -427,7 +427,11 @@ impl ToolDef {
 
         // T3-6: validate inline checksums are valid hex hashes
         for (platform, hash) in &self.checksums {
-            if Platform::from_key(platform).is_none() {
+            // npm-source tools are platform-independent (one tarball) and
+            // record their dist.integrity-verified checksum under the "npm"
+            // sentinel key rather than a per-platform key.
+            let is_npm_key = platform == "npm" && self.source == Source::Npm;
+            if !is_npm_key && Platform::from_key(platform).is_none() {
                 anyhow::bail!(
                     "unknown platform '{}' in checksums for {}",
                     platform,
@@ -702,6 +706,35 @@ mod tests {
             checksums: HashMap::new(),
             signature: None,
         }
+    }
+
+    #[test]
+    fn npm_source_accepts_npm_checksum_key() {
+        // npm-source tools record their dist.integrity-verified checksum under
+        // the "npm" sentinel key (platform-independent). validate() must accept it.
+        let mut def = make_valid_tool();
+        def.source = Source::Npm;
+        def.repo = None;
+        def.package = Some("@mermaid-js/mermaid-cli".to_string());
+        def.checksums.insert(
+            "npm".to_string(),
+            "f6fd0879dbf500e453784bbd9db92ae951097e0e9e8a90ec613f2bd3ca8fa06c".to_string(),
+        );
+        assert!(def.validate().is_ok(), "npm key must validate for npm source");
+    }
+
+    #[test]
+    fn non_npm_source_rejects_npm_checksum_key() {
+        // A github tool must NOT be allowed to use the "npm" sentinel key.
+        let mut def = make_valid_tool();
+        def.checksums.insert(
+            "npm".to_string(),
+            "f6fd0879dbf500e453784bbd9db92ae951097e0e9e8a90ec613f2bd3ca8fa06c".to_string(),
+        );
+        assert!(
+            def.validate().is_err(),
+            "npm key must be rejected for non-npm source"
+        );
     }
 
     #[test]
