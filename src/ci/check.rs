@@ -15,7 +15,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use std::io::Read;
 
 use crate::platform::Platform;
@@ -336,14 +336,105 @@ fn check_npm(def: &ToolDef) -> Result<Option<UpdateCandidate>> {
         return Ok(None);
     }
 
+    // Fetch dist.integrity and dist.tarball for the new version.
+    // npm view <pkg>@<ver> dist.integrity dist.tarball --json
+    // Output is a JSON object: { "dist.integrity": "sha512-...", "dist.tarball": "https://..." }
+    let integrity_json = run_cmd(
+        "npm",
+        &[
+            "view",
+            &format!("{package}@{latest}"),
+            "dist.integrity",
+            "dist.tarball",
+            "--json",
+        ],
+        None,
+    )
+    .with_context(|| format!("failed to fetch npm dist metadata for {package}@{latest}"))?;
+
+    let meta: serde_json::Value =
+        serde_json::from_str(integrity_json.trim()).with_context(|| {
+            format!("failed to parse npm dist metadata JSON for {package}@{latest}")
+        })?;
+
+    let integrity = meta["dist.integrity"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("npm dist.integrity missing for {package}@{latest}"))?
+        .to_string();
+
+    let tarball_url = meta["dist.tarball"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("npm dist.tarball missing for {package}@{latest}"))?
+        .to_string();
+
+    if !tarball_url.starts_with("https://") {
+        anyhow::bail!(
+            "npm dist.tarball URL must use https://, got: {tarball_url}"
+        );
+    }
+
+    // Parse the SRI string -- npm publishes sha512-<base64>.
+    let expected_bytes = verify::parse_npm_integrity(&integrity)
+        .with_context(|| format!("invalid dist.integrity for {package}@{latest}"))?;
+
+    // Download the tarball and compute its SHA-512.
+    eprintln!("    downloading npm tarball for {package}@{latest}");
+    let client = https_client()?;
+    let resp = client
+        .get(&tarball_url)
+        .send()
+        .with_context(|| format!("failed to download npm tarball: {tarball_url}"))?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "npm tarball download failed: HTTP {} from {tarball_url}",
+            resp.status()
+        );
+    }
+
+    let tarball_bytes = resp
+        .bytes()
+        .context("failed to read npm tarball response body")?;
+
+    // Compute SHA-512 of the downloaded bytes.
+    let mut hasher = Sha512::new();
+    hasher.update(&tarball_bytes);
+    let computed_bytes = hasher.finalize();
+
+    let integrity_ok = computed_bytes.as_slice() == expected_bytes.as_slice();
+
+    if !integrity_ok {
+        use base64::Engine as _;
+        let computed_b64 = base64::engine::general_purpose::STANDARD.encode(computed_bytes);
+        anyhow::bail!(
+            "npm tarball integrity MISMATCH for {package}@{latest}: \
+             expected sha512-{}, computed sha512-{}",
+            integrity.strip_prefix("sha512-").unwrap_or(&integrity),
+            computed_b64,
+        );
+    }
+
+    eprintln!("    npm: dist.integrity VERIFIED for {package}@{latest}");
+
+    // Store the hex SHA-256 of the tarball in checksums for the TOML
+    // (kit stores SHA-256 in checksums; record tarball sha256 under the "npm" key).
+    let mut sha256_hasher = Sha256::new();
+    sha256_hasher.update(&tarball_bytes);
+    let tarball_sha256 = hex::encode(sha256_hasher.finalize());
+
+    let mut checksums = HashMap::new();
+    let mut verified = HashMap::new();
+    checksums.insert("npm".to_string(), Some(tarball_sha256));
+    verified.insert("npm".to_string(), Some(true));
+
     Ok(Some(UpdateCandidate {
         name: def.name.clone(),
         current_version: def.version.clone(),
         new_version: latest,
         tag: String::new(),
-        checksums: HashMap::new(),
-        verified: HashMap::new(),
-        note: Some("npm package -- integrity verified by npm on install".to_string()),
+        checksums,
+        verified,
+        note: Some(format!("npm dist.integrity verified: {integrity}")),
     }))
 }
 
@@ -582,62 +673,164 @@ fn download_and_verify_url(
         .insert(platform.key().to_string(), Some(computed.clone()));
 
     // Verify against upstream checksum file
-    if def.checksum.is_some() {
-        let checksum_url = checksum_url_for(def, version, tag, platform);
-        if let Some(csum_url) = checksum_url {
-            match client.get(&csum_url).send() {
-                Ok(resp) if resp.status().is_success() => {
-                    let body = resp.text().context("failed to read checksum body")?;
+    if let Some(checksum_cfg) = &def.checksum {
+        let format = &checksum_cfg.format;
 
-                    let format = def
-                        .checksum
-                        .as_ref()
-                        .map(|c| &c.format)
-                        .unwrap_or(&ChecksumFormat::Sha256);
+        if *format == ChecksumFormat::YqMultiHash {
+            // yq publishes two files: `checksums` (multi-hash, filename first) and
+            // `checksums_hashes_order` (algorithm names in column order).
+            // Build both URLs from the checksum file config (which names the
+            // `checksums` file; the order file is always `checksums_hashes_order`).
+            let csum_url = match checksum_url_for(def, version, tag, platform) {
+                Some(u) => u,
+                None => {
+                    eprintln!(
+                        "    warning: cannot build yq checksum URL for {}",
+                        platform.key()
+                    );
+                    return Ok(());
+                }
+            };
 
-                    match verify::parse_checksum_file(&body, asset_name, format) {
-                        Ok(Some(expected)) => {
-                            if computed == expected {
-                                eprintln!("    {}: checksum VERIFIED", platform.key());
-                                candidate
-                                    .verified
-                                    .insert(platform.key().to_string(), Some(true));
-                            } else {
-                                eprintln!(
-                                    "    {}: checksum MISMATCH (expected={}, got={})",
-                                    platform.key(),
-                                    expected,
-                                    computed
-                                );
-                                candidate
-                                    .verified
-                                    .insert(platform.key().to_string(), Some(false));
+            // Derive the hashes_order URL by replacing the checksum filename in the URL.
+            let cfg = checksum_cfg;
+            let csum_filename = cfg
+                .file
+                .as_deref()
+                .unwrap_or("checksums")
+                .replace("{version}", version);
+            let order_url = csum_url.replace(&csum_filename, "checksums_hashes_order");
+
+            let csum_resp = client.get(&csum_url).send();
+            let order_resp = client.get(&order_url).send();
+
+            match (csum_resp, order_resp) {
+                (Ok(cr), Ok(or)) => {
+                    if !cr.status().is_success() {
+                        eprintln!(
+                            "    warning: could not download yq checksums file for {} (HTTP {})",
+                            platform.key(),
+                            cr.status()
+                        );
+                    } else if !or.status().is_success() {
+                        eprintln!(
+                            "    warning: could not download yq checksums_hashes_order (HTTP {})",
+                            or.status()
+                        );
+                    } else {
+                        let csum_body = cr
+                            .text()
+                            .context("failed to read yq checksums body")?;
+                        let order_body = or
+                            .text()
+                            .context("failed to read yq checksums_hashes_order body")?;
+
+                        match verify::parse_yq_checksums(&csum_body, &order_body, asset_name) {
+                            Ok(Some(expected)) => {
+                                if computed == expected {
+                                    eprintln!(
+                                        "    {}: checksum VERIFIED (yq)",
+                                        platform.key()
+                                    );
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(true));
+                                } else {
+                                    eprintln!(
+                                        "    {}: checksum MISMATCH (yq) (expected={}, got={})",
+                                        platform.key(),
+                                        expected,
+                                        computed
+                                    );
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(false));
+                                }
                             }
-                        }
-                        Ok(None) => {
-                            eprintln!("    warning: {} not found in checksum file", asset_name);
-                            candidate.verified.insert(platform.key().to_string(), None);
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "    warning: checksum parse error for {}: {e}",
-                                platform.key()
-                            );
-                            candidate.verified.insert(platform.key().to_string(), None);
+                            Ok(None) => {
+                                eprintln!(
+                                    "    warning: {} not found in yq checksums file",
+                                    asset_name
+                                );
+                                candidate.verified.insert(platform.key().to_string(), None);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "    warning: yq checksum parse error for {}: {e}",
+                                    platform.key()
+                                );
+                                candidate.verified.insert(platform.key().to_string(), None);
+                            }
                         }
                     }
                 }
-                Ok(_) => {
+                (Err(e), _) => {
                     eprintln!(
-                        "    warning: could not download checksum file for {}",
+                        "    warning: yq checksums download failed for {}: {e}",
                         platform.key()
                     );
                 }
-                Err(e) => {
+                (_, Err(e)) => {
                     eprintln!(
-                        "    warning: checksum download failed for {}: {e}",
+                        "    warning: yq checksums_hashes_order download failed for {}: {e}",
                         platform.key()
                     );
+                }
+            }
+        } else {
+            let checksum_url = checksum_url_for(def, version, tag, platform);
+            if let Some(csum_url) = checksum_url {
+                match client.get(&csum_url).send() {
+                    Ok(resp) if resp.status().is_success() => {
+                        let body = resp.text().context("failed to read checksum body")?;
+
+                        match verify::parse_checksum_file(&body, asset_name, format) {
+                            Ok(Some(expected)) => {
+                                if computed == expected {
+                                    eprintln!("    {}: checksum VERIFIED", platform.key());
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(true));
+                                } else {
+                                    eprintln!(
+                                        "    {}: checksum MISMATCH (expected={}, got={})",
+                                        platform.key(),
+                                        expected,
+                                        computed
+                                    );
+                                    candidate
+                                        .verified
+                                        .insert(platform.key().to_string(), Some(false));
+                                }
+                            }
+                            Ok(None) => {
+                                eprintln!(
+                                    "    warning: {} not found in checksum file",
+                                    asset_name
+                                );
+                                candidate.verified.insert(platform.key().to_string(), None);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "    warning: checksum parse error for {}: {e}",
+                                    platform.key()
+                                );
+                                candidate.verified.insert(platform.key().to_string(), None);
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        eprintln!(
+                            "    warning: could not download checksum file for {}",
+                            platform.key()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "    warning: checksum download failed for {}: {e}",
+                            platform.key()
+                        );
+                    }
                 }
             }
         }

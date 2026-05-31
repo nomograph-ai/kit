@@ -81,6 +81,10 @@ pub enum Source {
 pub enum ChecksumFormat {
     Sha256,
     Sha256PerAsset,
+    /// yq (mikefarah/yq) multi-hash format:
+    /// `checksums` has rows of `<filename>  <crc32>  <md4>  ... <sha256> ... <sha512> ...`
+    /// (filename first, then hashes in the order listed by `checksums_hashes_order`).
+    YqMultiHash,
 }
 
 /// Signature verification method.

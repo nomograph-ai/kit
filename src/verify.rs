@@ -97,7 +97,90 @@ pub fn parse_checksum_file(
             validate_hex_hash(hash)?;
             Ok(Some(hash.to_lowercase()))
         }
+        ChecksumFormat::YqMultiHash => {
+            // Caller must provide the hashes_order content separately via
+            // parse_yq_checksums.  This variant is not meaningful through
+            // the single-content interface; return None so callers fall back.
+            Ok(None)
+        }
     }
+}
+
+/// Parse yq's multi-hash checksum files.
+///
+/// `checksums_content`: the content of the `checksums` file published by
+/// mikefarah/yq.  Each row is whitespace-separated with the filename first,
+/// then one hash per column in the order given by `checksums_hashes_order`.
+///
+/// `hashes_order_content`: the content of `checksums_hashes_order` -- a
+/// newline-delimited list of algorithm names (e.g. "CRC-32", "MD4", ...,
+/// "SHA-256", ..., "SHA-512").
+///
+/// Returns the lower-case hex SHA-256 for `asset_name`, or `Ok(None)` if
+/// the asset is not listed.
+pub fn parse_yq_checksums(
+    checksums_content: &str,
+    hashes_order_content: &str,
+    asset_name: &str,
+) -> Result<Option<String>> {
+    // Determine which 0-based column (after the filename field at index 0)
+    // holds SHA-256.  The hashes_order file uses one algorithm name per line.
+    let order: Vec<&str> = hashes_order_content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let sha256_idx = order
+        .iter()
+        .position(|alg| alg.eq_ignore_ascii_case("SHA-256"))
+        .ok_or_else(|| anyhow::anyhow!("SHA-256 not found in checksums_hashes_order"))?;
+
+    // Column index in the row: field 0 is filename, so hash columns start at 1.
+    let col = sha256_idx + 1;
+
+    for line in checksums_content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // field 0 is the filename
+        if fields.is_empty() {
+            continue;
+        }
+        let filename = fields[0];
+        if filename != asset_name && !filename.ends_with(&format!("/{asset_name}")) {
+            continue;
+        }
+        let hash = fields
+            .get(col)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "checksums row for '{}' has only {} fields; expected column {}",
+                    asset_name,
+                    fields.len(),
+                    col
+                )
+            })?;
+        validate_hex_hash(hash)?;
+        return Ok(Some(hash.to_lowercase()));
+    }
+
+    Ok(None)
+}
+
+/// Parse an npm Subresource-Integrity string of the form `sha512-<base64>`.
+///
+/// Returns the raw SHA-512 bytes on success.
+pub fn parse_npm_integrity(integrity: &str) -> Result<Vec<u8>> {
+    let b64 = integrity
+        .strip_prefix("sha512-")
+        .ok_or_else(|| anyhow::anyhow!("npm integrity must start with 'sha512-', got: {integrity}"))?;
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .with_context(|| format!("failed to base64-decode npm integrity: {b64}"))
 }
 
 /// Ensure a string looks like a valid hex-encoded SHA256 hash.
@@ -794,5 +877,112 @@ a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  target.bin
         )
         .unwrap();
         assert!(result.is_failed());
+    }
+
+    // -- yq multi-hash checksum tests --
+
+    /// Minimal fixture matching the real yq `checksums_hashes_order` format.
+    /// Columns: CRC-32, MD4, MD5, SHA-1, SHA-256, SHA-512  (0-based after filename)
+    const YQ_HASHES_ORDER: &str = "CRC-32\nMD4\nMD5\nSHA-1\nSHA-256\nSHA-512\n";
+
+    /// A fixture row: filename then one hash per column.
+    /// SHA-256 is in column index 4 (0-based from hash columns, i.e. field index 5).
+    const YQ_CHECKSUMS: &str =
+        "yq_linux_amd64  00000000  00000000000000000000000000000000  00000000000000000000000000000000  0000000000000000000000000000000000000000  a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2  0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n\
+         yq_darwin_arm64  11111111  11111111111111111111111111111111  11111111111111111111111111111111  1111111111111111111111111111111111111111  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\n";
+
+    #[test]
+    fn yq_multi_hash_extracts_sha256_for_linux() {
+        let result = parse_yq_checksums(YQ_CHECKSUMS, YQ_HASHES_ORDER, "yq_linux_amd64").unwrap();
+        assert_eq!(
+            result,
+            Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string())
+        );
+    }
+
+    #[test]
+    fn yq_multi_hash_extracts_sha256_for_darwin() {
+        let result = parse_yq_checksums(YQ_CHECKSUMS, YQ_HASHES_ORDER, "yq_darwin_arm64").unwrap();
+        assert_eq!(
+            result,
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string())
+        );
+    }
+
+    #[test]
+    fn yq_multi_hash_returns_none_for_missing_asset() {
+        let result =
+            parse_yq_checksums(YQ_CHECKSUMS, YQ_HASHES_ORDER, "yq_windows_amd64.exe").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn yq_multi_hash_errors_when_sha256_absent_from_order() {
+        let bad_order = "CRC-32\nMD4\nMD5\nSHA-1\nSHA-512\n"; // no SHA-256
+        let result = parse_yq_checksums(YQ_CHECKSUMS, bad_order, "yq_linux_amd64");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("SHA-256 not found"));
+    }
+
+    #[test]
+    fn yq_multi_hash_is_case_insensitive_for_algorithm_name() {
+        // Some future release might lowercase the algorithm names.
+        let order_lowercase = "crc-32\nmd4\nmd5\nsha-1\nsha-256\nsha-512\n";
+        let result =
+            parse_yq_checksums(YQ_CHECKSUMS, order_lowercase, "yq_linux_amd64").unwrap();
+        assert_eq!(
+            result,
+            Some("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2".to_string())
+        );
+    }
+
+    // -- npm SRI / parse_npm_integrity tests --
+
+    #[test]
+    fn npm_integrity_parse_roundtrip() {
+        use base64::Engine as _;
+        // Construct a known SHA-512 value, encode it, wrap in SRI format, then parse back.
+        let raw_bytes: Vec<u8> = (0u8..64).collect(); // 64 bytes
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+        let sri = format!("sha512-{b64}");
+
+        let parsed = parse_npm_integrity(&sri).unwrap();
+        assert_eq!(parsed, raw_bytes);
+    }
+
+    #[test]
+    fn npm_integrity_rejects_wrong_algorithm() {
+        let result = parse_npm_integrity("sha256-abc123");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must start with 'sha512-'"));
+    }
+
+    #[test]
+    fn npm_integrity_rejects_bad_base64() {
+        let result = parse_npm_integrity("sha512-not!valid!base64!!!");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn npm_integrity_verify_known_tarball() {
+        use base64::Engine as _;
+        use sha2::Digest;
+        // Compute the sha512 of a known payload, encode as SRI, then verify.
+        let payload = b"fake npm tarball content for test";
+        let mut hasher = sha2::Sha512::new();
+        hasher.update(payload);
+        let digest = hasher.finalize();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&digest);
+        let sri = format!("sha512-{b64}");
+
+        // Parse and compare.
+        let expected_bytes = parse_npm_integrity(&sri).unwrap();
+        assert_eq!(expected_bytes.as_slice(), digest.as_slice());
     }
 }
