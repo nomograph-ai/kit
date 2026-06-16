@@ -237,6 +237,16 @@ are fetched from the same release as the asset), archive-content
 signature verification, or human review substitution for tiers that
 auto-merge.
 
+## Retired 2026-06-16
+
+kit is retired, superseded by **mise** (jdx/mise). Tool pins now live in
+version-controlled `mise.toml` + a committed `mise.lock` (per-platform sha256 +
+provenance): the machine-baseline in `dunn.dev/harness`, per-estate configs
+(e.g. `nomograph/keaton`). Updates flow via Renovate (with a customManager for
+`gitlab:` backends) + a CI provenance audit over `mise.lock` diffs — kit's
+verified-installer + auto-bump intent, on a stable host. Migration record:
+`nomograph/keaton` -> `campaigns/harness/sessions/baseline.md` (2026-06-16).
+
 ## License
 
 MIT -- [Nomograph](https://gitlab.com/nomograph)
